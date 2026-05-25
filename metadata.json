@@ -1,0 +1,6 @@
+{
+  "name": "團隊排休系統",
+  "description": "支援本機離線優先與 GitHub Gist 雲端同步的精緻團隊排班與排休管理系統，具備日曆/表格雙視圖、權限管理與安全操作日誌。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
