@@ -78,15 +78,13 @@ export default function App() {
       : { githubToken: '', gistId: '', lastSynced: '', status: 'UNCONFIGURED' };
   });
 
-  // Default logged in user: 系統管理員 (ADMIN) to ensure immediate unlocked status
+  // Default logged in user: null, to enforce login view first upon visit (except when saved session exists)
   const [currentLoginUser, setCurrentLoginUser] = useState<Employee | null>(() => {
     const saved = localStorage.getItem('team_scheduling_login_user');
     if (saved) {
       return JSON.parse(saved);
     }
-    // Find "系統管理員" as default
-    const adminUser = INITIAL_EMPLOYEES.find(e => e.role === 'ADMIN');
-    return adminUser || INITIAL_EMPLOYEES[0];
+    return null; // Require login initially
   });
 
   // Sync state to localstorage when changes occur
@@ -183,7 +181,12 @@ export default function App() {
 
   // Auth Dialog state
   const [isAuthPanelOpen, setIsAuthPanelOpen] = useState(false);
-  const [authSelectId, setAuthSelectId] = useState('');
+  const [authSelectId, setAuthSelectId] = useState<string>(() => {
+    // Return the first employee's ID to populate dropdown selection
+    const saved = localStorage.getItem('team_scheduling_employees');
+    const emps = saved ? JSON.parse(saved) : INITIAL_EMPLOYEES;
+    return emps[0]?.id || '';
+  });
   const [authPasswordInput, setAuthPasswordInput] = useState('');
   const [authError, setAuthError] = useState('');
 
@@ -669,6 +672,103 @@ export default function App() {
     if (!currentLoginUser) return '訪客/唯讀模式';
     return `${currentLoginUser.name} (${ROLE_LABELS[currentLoginUser.role as Role]})`;
   };
+
+  if (!currentLoginUser) {
+    return (
+      <div className="min-h-screen bg-slate-100 text-slate-800 flex flex-col items-center justify-center font-sans p-4 antialiased">
+        <div className="w-full max-w-sm bg-white shadow-2xl rounded-2xl border border-slate-200/60 overflow-hidden flex flex-col relative">
+          
+          <div className="absolute top-4 right-4 text-[10px] font-bold text-slate-400 bg-slate-100 rounded px-1.5 py-0.5 pointer-events-none">
+            v2.6.0
+          </div>
+
+          {/* Logo & Heading */}
+          <div className="p-6 text-center border-b border-slate-100 bg-slate-50/50 flex flex-col items-center gap-3">
+            <div className="p-3 bg-indigo-50 text-indigo-600 rounded-2xl shadow-xs">
+              <CalendarIcon className="w-8 h-8 mx-auto text-indigo-600" strokeWidth={2.5} />
+            </div>
+            <div>
+              <h1 className="text-xl font-black tracking-tight text-slate-800 font-sans">
+                團隊排休管理系統
+              </h1>
+              <p className="text-xs text-slate-400 mt-1 font-semibold">
+                請選擇作業人員身分並輸入 4 位密碼解鎖
+              </p>
+            </div>
+          </div>
+
+          {/* Login Form content */}
+          <form onSubmit={handlePerformLogin} className="p-6 space-y-5">
+            {authError && (
+              <p className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-xs leading-relaxed flex items-center gap-1.5 font-bold animate-pulse">
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-500" />
+                <span>{authError}</span>
+              </p>
+            )}
+
+            <div className="space-y-1.5">
+              <label className="block text-xs font-bold text-slate-500 tracking-wider">
+                1. 選擇作業同仁
+              </label>
+              <select
+                value={authSelectId}
+                onChange={(e) => {
+                  setAuthSelectId(e.target.value);
+                  setAuthError('');
+                }}
+                className="w-full px-3 py-2.5 text-xs border border-slate-200 rounded-xl bg-white font-bold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all cursor-pointer shadow-2xs"
+              >
+                {employees.map((emp) => (
+                  <option key={emp.id} value={emp.id}>
+                    {emp.name} ({ROLE_LABELS[emp.role]})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-1.5">
+              <div className="flex justify-between items-center text-xs font-bold text-slate-500">
+                <label className="tracking-wider">2. 輸入驗證密碼</label>
+                <span className="text-[10px] text-indigo-600 font-semibold bg-indigo-50 rounded px-1.5 py-0.5">預設密碼 1234</span>
+              </div>
+              <input
+                type="password"
+                placeholder="請輸入密碼"
+                maxLength={4}
+                value={authPasswordInput}
+                onChange={(e) => {
+                  setAuthPasswordInput(e.target.value);
+                  setAuthError('');
+                }}
+                className="w-full px-3 py-2.5 text-center text-sm font-mono tracking-widest border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 text-slate-800 bg-white"
+                autoFocus
+              />
+            </div>
+
+            <div className="pt-2">
+              <button
+                type="submit"
+                disabled={!authSelectId}
+                className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl transition-all shadow-md cursor-pointer flex items-center justify-center gap-2"
+              >
+                <LogIn className="w-4 h-4 shrink-0" />
+                <span>身分確認登入</span>
+              </button>
+            </div>
+
+            <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-400 font-medium font-sans">
+              <span>
+                系統預設模式
+              </span>
+              <span className="bg-slate-100 text-slate-500 font-bold px-1.5 py-0.5 rounded">
+                密碼口令防護區
+              </span>
+            </div>
+          </form>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans relative pb-12 antialiased">
