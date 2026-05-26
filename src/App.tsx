@@ -57,8 +57,8 @@ import { jsPDF } from 'jspdf';
 // 您可以直接在此處填入您的金鑰預設值，或是透過環境變數 (.env) VITE_GIST_ID / VITE_GIST_PAT 帶入。
 // 系統將自動代管同步，無需員工手動輸入，且設定視窗已完全隱藏。
 // ============================================================================
-const DEFAULT_GIST_ID = import.meta.env.VITE_GIST_ID || 'your_default_gist_id_here';
-const DEFAULT_GIST_PAT = import.meta.env.VITE_GIST_PAT || 'your_default_pat_here';
+const DEFAULT_GIST_ID = ''; 
+const DEFAULT_GIST_PAT = '';
 
 export default function App() {
   // -------------------------------------------------------------
