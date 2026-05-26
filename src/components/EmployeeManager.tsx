@@ -224,7 +224,7 @@ export default function EmployeeManager({
                       onChange={(e) => setNewEmpRole(e.target.value as Role)}
                       className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-700"
                     >
-                      <option value="CLEANER">清潔人員</option>
+                      <option value="CLEANER">外勤人員</option>
                       <option value="RECEPTION">櫃台人員</option>
                       <option value="PART_TIME">工讀生</option>
                       <option value="MANAGER">主管</option>
@@ -301,7 +301,7 @@ export default function EmployeeManager({
                 <span className="font-semibold text-slate-700">排班限制守則：</span>
                 <ul className="list-disc pl-3.5 space-y-0.5 mt-1 text-[10px]">
                   <li>
-                    <strong className="text-red-700">清潔人員 (CLEANER)</strong>：每天有「最多 1 人排休」的限制。
+                    <strong className="text-red-700">外勤人員 (CLEANER)</strong>：每天有「最多 1 人排休」的限制。
                   </li>
                   <li>
                     櫃台、工讀生、主管不設每日排班人數上限。
@@ -374,7 +374,7 @@ export default function EmployeeManager({
                         }
                         className="py-0.5 px-1.5 text-[11px] border border-slate-200 bg-slate-50 rounded text-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                       >
-                        <option value="CLEANER">清潔人員</option>
+                        <option value="CLEANER">外勤人員</option>
                         <option value="RECEPTION">櫃台人員</option>
                         <option value="PART_TIME">工讀生</option>
                         <option value="MANAGER">主管</option>

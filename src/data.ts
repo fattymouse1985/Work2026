@@ -95,7 +95,7 @@ export const INITIAL_EMPLOYEES: Employee[] = [
 
 export const ROLE_LABELS: Record<Role, string> = {
   ADMIN: '管理員',
-  CLEANER: '清潔人員',
+  CLEANER: '外勤人員',
   RECEPTION: '櫃台人員',
   PART_TIME: '工讀生',
   MANAGER: '主管',

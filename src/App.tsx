@@ -540,7 +540,7 @@ export default function App() {
         const check = checkCleanerLimit(dateStr, targetEmpId);
         if (!check.allowed) {
           showToast(
-            `排班限制：清潔人員每日上限 1 人！${dateStr} 已有「${check.activeCleanerName}」休假`,
+            `排班限制：外勤人員每日上限 1 人！${dateStr} 已有「${check.activeCleanerName}」休假`,
             true
           );
           return;
@@ -630,7 +630,7 @@ export default function App() {
           const limitCheck = checkCleanerLimit(editingDate, empId);
           if (!limitCheck.allowed) {
             alert(
-              `⚠️ 超限警告！\n當月份 ${editingDate} 已有另一位清潔人員「${limitCheck.activeCleanerName}」在休假中。\n清潔組每天最多限 1 人排休，系統已拒絕「${emp.name}」的此筆假單。`
+              `⚠️ 超限警告！\n當月份 ${editingDate} 已有另一位外勤人員「${limitCheck.activeCleanerName}」在休假中。\n外勤組每天最多限 1 人排休，系統已拒絕「${emp.name}」的此筆假單。`
             );
             return; // stop execution completely to allow user to retry
           }
@@ -1281,7 +1281,7 @@ export default function App() {
                 <p className="text-[11px] text-amber-800 leading-relaxed font-sans font-medium flex items-center gap-1">
                   <Info className="w-3.5 h-3.5 shrink-0 inline text-amber-600" />
                   <span>
-                    配置完成！現在<strong>點按下方日曆格子或表格</strong>可立即增設或取消「排休」 (清潔人員每天限一人)。
+                    配置完成！現在<strong>點按下方日曆格子或表格</strong>可立即增設或取消「排休」 (外勤人員每天限一人)。
                   </span>
                 </p>
               </div>
@@ -1369,8 +1369,8 @@ export default function App() {
               
               {/* Daily CLEANER limit notice on report */}
               <div className="flex items-center justify-center gap-3 text-[10px] text-slate-400">
-                <span>● 稽核守則：清潔組 (CLEANER) 每日上限排休 1 人</span>
-                <span>● 單位/組別：清潔、櫃台、工讀、行政主管</span>
+                <span>● 稽核守則：外勤組 (CLEANER) 每日上限排休 1 人</span>
+                <span>● 單位/組別：外勤、櫃台、工讀、行政主管</span>
               </div>
             </div>
 
@@ -1468,7 +1468,7 @@ export default function App() {
                         <div className="text-[9px] font-semibold text-right">
                           {cleanerOnDay.length > 0 && (
                             <span className="text-emerald-700 bg-emerald-50 px-1 border border-emerald-200 rounded">
-                              清潔組休假 1/1
+                              外勤組休假 1/1
                             </span>
                           )}
                         </div>
@@ -1743,7 +1743,7 @@ export default function App() {
                           {cleanersOnDay.length > 0 && (
                             <div className="pt-1 flex items-center gap-1 select-none text-[9px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-100 rounded-md w-fit px-2 py-0.5">
                               <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
-                              <span>清潔組休假 1/1 (符合限額守則)</span>
+                              <span>外勤組休假 1/1 (符合限額守則)</span>
                             </div>
                           )}
                         </div>
@@ -1803,11 +1803,11 @@ export default function App() {
             <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-3 animate-fade-in">
               <h3 className="text-xs font-bold text-slate-400 tracking-wider uppercase flex items-center gap-1.5">
                 <ShieldAlert className="w-3.5 h-3.5 text-red-500" />
-                清潔人員排班監控
+                外勤人員排班監控
               </h3>
               
               <p className="text-xs text-slate-500 leading-relaxed">
-                根據企業政策，<strong className="text-rose-600">清潔人員 (CLEANER) 同一天最多指派 1 人排休</strong>，以維持環境現場基本工作人力：
+                根據企業政策，<strong className="text-rose-600">外勤人員 (CLEANER) 同一天最多指派 1 人排休</strong>，以維持環境現場基本工作人力：
               </p>
 
               <div className="space-y-1.5 text-xs">
@@ -1819,7 +1819,7 @@ export default function App() {
                       <div key={emp.id} className="flex justify-between items-center py-1 border-b border-slate-50">
                         <span className="flex items-center gap-1">
                           <span style={{ backgroundColor: emp.color }} className="w-2 h-2 rounded-full inline-block" />
-                          {emp.name} (清潔組)
+                          {emp.name} (外勤組)
                         </span>
                         <span className="font-bold text-slate-700">{daysNum} 日排休</span>
                       </div>
@@ -1828,7 +1828,7 @@ export default function App() {
               </div>
               
               <div className="bg-rose-50/50 p-2.5 rounded-lg border border-rose-100 text-[10px] text-slate-500 font-sans">
-                * 超限檢測引擎於系統背景即時運行。在雙重視圖勾選假單，皆會直接攔截並封鎖第二名清潔同仁之申請。
+                * 超限檢測引擎於系統背景即時運行。在雙重視圖勾選假單，皆會直接攔截並封鎖第二名外勤同仁之申請。
               </div>
             </div>
           )}
@@ -1925,10 +1925,10 @@ export default function App() {
               {/* Cleaner limits visual indicator */}
               <div className="p-3 bg-indigo-50 text-indigo-900 rounded-lg text-xs leading-relaxed border border-indigo-100">
                 <strong className="text-indigo-950 block mb-0.5">※ 排休受限檢定提醒</strong>
-                今日清潔組 ({visibleEmployees.filter((e)=>e.role==='CLEANER').map(e=>e.name).join('、')}) 同天累計不能超過 1 人。
+                今日外勤組 ({visibleEmployees.filter((e)=>e.role==='CLEANER').map(e=>e.name).join('、')}) 同天累計不能超過 1 人。
                 當前排定狀態：
                 <span className="font-bold text-indigo-700 ml-1">
-                  {visibleLeaveRecords.filter(lr => lr.date === editingDate && lr.role === 'CLEANER').map(lr => lr.employeeName).join(', ') || '尚無清潔同仁排休'}
+                  {visibleLeaveRecords.filter(lr => lr.date === editingDate && lr.role === 'CLEANER').map(lr => lr.employeeName).join(', ') || '尚無外勤同仁排休'}
                 </span>
               </div>
 
