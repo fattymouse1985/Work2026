@@ -215,6 +215,116 @@ export default function App() {
     setSecurityLogs((prev) => [newLog, ...prev]);
   };
 
+  const [isSyncingCloud, setIsSyncingCloud] = useState(false);
+
+  const handleQuickSync = async () => {
+    if (gistConfig.status !== 'CONNECTED' || !gistConfig.githubToken || !gistConfig.gistId) {
+      showToast('尚未設定或啟用 GitHub Gist 雲端連線，請聯絡系統管理員設定！', true);
+      return;
+    }
+
+    setIsSyncingCloud(true);
+    showToast('正在與雲端同步中...');
+    handleAddLog('一鍵雲端同步', '啟動一鍵快捷雙向數據同步程序。');
+
+    try {
+      // Step 1: PULL (GET) latest state from cloud
+      const pullRes = await fetch(`https://api.github.com/gists/${gistConfig.gistId}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${gistConfig.githubToken}`,
+          'Accept': 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+        },
+      });
+
+      let latestEmployees = employees;
+      let latestLeaveRecords = leaveRecords;
+      let latestSecurityLogs = securityLogs;
+
+      if (pullRes.ok) {
+        const gistData = await pullRes.json();
+        const backupFile = gistData.files?.['schedule.json'];
+        if (backupFile && backupFile.content) {
+          const parsed = JSON.parse(backupFile.content);
+          if (parsed.employees && parsed.leaveRecords) {
+            latestEmployees = parsed.employees;
+            
+            // Reconcile and merge by ID
+            const cloudRcMap = new Map(parsed.leaveRecords.map((r: any) => [r.id, r]));
+            const localRcMap = new Map(leaveRecords.map((r: any) => [r.id, r]));
+            const combinedRecords = Array.from(new Set([...leaveRecords, ...parsed.leaveRecords].map(r => r.id)))
+              .map(id => localRcMap.get(id) || cloudRcMap.get(id))
+              .filter(Boolean) as LeaveRecord[];
+            
+            latestLeaveRecords = combinedRecords;
+
+            const cloudLogMap = new Map((parsed.securityLogs || []).map((l: any) => [l.id, l]));
+            const localLogMap = new Map(securityLogs.map((l: any) => [l.id, l]));
+            const combinedLogs = Array.from(new Set([...securityLogs, ...(parsed.securityLogs || [])].map(l => l.id)))
+              .map(id => localLogMap.get(id) || cloudLogMap.get(id))
+              .filter(Boolean) as SecurityLog[];
+            combinedLogs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+            
+            latestSecurityLogs = combinedLogs;
+
+            setEmployees(latestEmployees);
+            setLeaveRecords(latestLeaveRecords);
+            setSecurityLogs(latestSecurityLogs);
+          }
+        }
+      }
+
+      // Step 2: PUSH (PATCH) reconciled state to Gist
+      const stateToBackup = {
+        version: '1.0',
+        lastUpdated: new Date().toISOString(),
+        employees: latestEmployees,
+        leaveRecords: latestLeaveRecords,
+        securityLogs: latestSecurityLogs,
+      };
+
+      const payload = {
+        description: '團隊排休系統雲端自動備份資料',
+        files: {
+          'schedule.json': {
+            content: JSON.stringify(stateToBackup, null, 2),
+          },
+        },
+      };
+
+      const pushRes = await fetch(`https://api.github.com/gists/${gistConfig.gistId}`, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `Bearer ${gistConfig.githubToken}`,
+          'Accept': 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!pushRes.ok) {
+        throw new Error(`雲端寫入失敗 (狀態碼: ${pushRes.status})`);
+      }
+
+      const syncTime = new Date().toLocaleString();
+      setGistConfig(prev => ({
+        ...prev,
+        lastSynced: syncTime,
+        status: 'CONNECTED',
+      }));
+
+      handleAddLog('一鍵雲端同步成功', '成功完成快捷雙向數據同步。');
+      showToast('雙向雲端資料同步成功！');
+    } catch (err: any) {
+      handleAddLog('一鍵雲端同步失敗', `快捷同步錯誤：${err.message || err}`);
+      showToast(`同步失敗：${err.message || '連線中斷'}`, true);
+    } finally {
+      setIsSyncingCloud(false);
+    }
+  };
+
   // -------------------------------------------------------------
   // 4. Calendar Matrix Generator math helpers
   // -------------------------------------------------------------
@@ -376,8 +486,10 @@ export default function App() {
     const isAuthorized =
       currentLoginUser.role === 'ADMIN' || currentLoginUser.role === 'MANAGER';
 
+    const isQuickModeActive = currentLoginUser.role !== 'ADMIN' || quickLeaveMode;
+
     // A. QUICK LEAVE MODE (DIRECT CLICK TOGGLE)
-    if (quickLeaveMode) {
+    if (isQuickModeActive) {
       // In quick mode, determine target employee
       const targetEmpId = isAuthorized ? quickTargetEmpId : currentLoginUser.id;
       const targetEmp = employees.find((e) => e.id === targetEmpId);
@@ -790,34 +902,63 @@ export default function App() {
                 </h1>
                 
                 {/* Cloud Connection Badge */}
-                <button
-                  onClick={() => setIsBackupOpen(true)}
-                  className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold cursor-pointer border transition-colors ${
-                    gistConfig.status === 'CONNECTED'
-                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
-                      : gistConfig.status === 'ERROR'
-                      ? 'bg-rose-50 text-rose-600 border-rose-200 hover:bg-rose-100'
-                      : 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200'
-                  }`}
-                  title="點擊設定雲端 API 同步資訊"
-                >
-                  <span
-                    className={`w-1.5 h-1.5 rounded-full ${
+                {currentLoginUser?.role === 'ADMIN' ? (
+                  <button
+                    onClick={() => setIsBackupOpen(true)}
+                    className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold cursor-pointer border transition-colors ${
                       gistConfig.status === 'CONNECTED'
-                        ? 'bg-emerald-500 animate-pulse'
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
                         : gistConfig.status === 'ERROR'
-                        ? 'bg-rose-500 animate-ping'
-                        : 'bg-slate-400'
+                        ? 'bg-rose-50 text-rose-600 border-rose-200 hover:bg-rose-100'
+                        : 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200'
                     }`}
-                  />
-                  {gistConfig.status === 'CONNECTED' ? (
-                    <span>Gist 雲端同步模式</span>
-                  ) : gistConfig.status === 'ERROR' ? (
-                    <span>Gist 金鑰異常</span>
-                  ) : (
-                    <span>純本地暫存模式</span>
-                  )}
-                </button>
+                    title="點擊設定雲端 API 同步資訊"
+                  >
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${
+                        gistConfig.status === 'CONNECTED'
+                          ? 'bg-emerald-500 animate-pulse'
+                          : gistConfig.status === 'ERROR'
+                          ? 'bg-rose-500 animate-ping'
+                          : 'bg-slate-400'
+                      }`}
+                    />
+                    {gistConfig.status === 'CONNECTED' ? (
+                      <span>Gist 雲端同步模式</span>
+                    ) : gistConfig.status === 'ERROR' ? (
+                      <span>Gist 金鑰異常</span>
+                    ) : (
+                      <span>純本地暫存模式</span>
+                    )}
+                  </button>
+                ) : (
+                  <div
+                    className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${
+                      gistConfig.status === 'CONNECTED'
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        : gistConfig.status === 'ERROR'
+                        ? 'bg-rose-50 text-rose-600 border-rose-200'
+                        : 'bg-slate-100 text-slate-600 border-slate-200'
+                    }`}
+                  >
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${
+                        gistConfig.status === 'CONNECTED'
+                          ? 'bg-emerald-500'
+                          : gistConfig.status === 'ERROR'
+                          ? 'bg-rose-500'
+                          : 'bg-slate-400'
+                      }`}
+                    />
+                    {gistConfig.status === 'CONNECTED' ? (
+                      <span>雲端同步模式</span>
+                    ) : gistConfig.status === 'ERROR' ? (
+                      <span>雲端連線異常</span>
+                    ) : (
+                      <span>離線暫存模式</span>
+                    )}
+                  </div>
+                )}
               </div>
               <p className="text-[10px] text-slate-400 font-mono">
                 {gistConfig.status === 'CONNECTED' && gistConfig.lastSynced
@@ -829,13 +970,15 @@ export default function App() {
 
           {/* Quick Control Actions */}
           <div className="flex flex-wrap items-center gap-2.5">
-            <button
-              onClick={() => setIsEmpManagerOpen(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg shadow-xs transition-colors cursor-pointer"
-            >
-              <User className="w-3.5 h-3.5 text-slate-500" />
-              <span>同仁調度</span>
-            </button>
+            {(currentLoginUser?.role === 'ADMIN' || currentLoginUser?.role === 'MANAGER') && (
+              <button
+                onClick={() => setIsEmpManagerOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg shadow-xs transition-colors cursor-pointer"
+              >
+                <User className="w-3.5 h-3.5 text-slate-500" />
+                <span>同仁調度</span>
+              </button>
+            )}
 
             <button
               onClick={() => setIsLogsOpen(true)}
@@ -845,13 +988,36 @@ export default function App() {
               <span>操作日誌</span>
             </button>
 
+            {/* 立即同步按鈕：對所有同仁一律顯示，未設定時點擊提示引導 */}
             <button
-              onClick={() => setIsBackupOpen(true)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-100 rounded-lg shadow-xs transition-colors cursor-pointer"
+              onClick={() => {
+                if (gistConfig.status !== 'CONNECTED') {
+                  showToast('請聯絡系統管理員設定 GitHub Gist 雲端同步金鑰以啟用此功能！', true);
+                  return;
+                }
+                handleQuickSync();
+              }}
+              disabled={isSyncingCloud}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg shadow-xs transition-colors cursor-pointer ${
+                gistConfig.status === 'CONNECTED'
+                  ? 'text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200'
+                  : 'text-slate-400 bg-slate-100 hover:bg-slate-200 border border-slate-200'
+              }`}
+              title={gistConfig.status === 'CONNECTED' ? '與雲端 Gist 執行雙向備份與數據同步' : '未設定雲端同步，點按獲取詳情'}
             >
-              <Settings className="w-3.5 h-3.5 text-indigo-600 animate-spin-slow" />
-              <span>備份與雲端同步</span>
+              <RefreshCcw className={`w-3.5 h-3.5 ${gistConfig.status === 'CONNECTED' ? 'text-emerald-600' : 'text-slate-400'} ${isSyncingCloud ? 'animate-spin' : ''}`} />
+              <span>{isSyncingCloud ? '儲存同步中...' : '立即同步'}</span>
             </button>
+
+            {currentLoginUser?.role === 'ADMIN' && (
+              <button
+                onClick={() => setIsBackupOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-100 rounded-lg shadow-xs transition-colors cursor-pointer"
+              >
+                <Settings className="w-3.5 h-3.5 text-indigo-600 animate-spin-slow" />
+                <span>備份與雲端同步</span>
+              </button>
+            )}
 
             {/* Custom User Logged In UI widget */}
             <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl p-1 pl-2.5">
@@ -1612,70 +1778,74 @@ export default function App() {
         {/* -------------------------------------------------------------
             SIDEBAR QUOTA AND TEAM WORKLOAD METRIC STATS
             ------------------------------------------------------------- */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 no-print">
+        <div className={`grid gap-5 no-print ${currentLoginUser?.role === 'ADMIN' ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3' : 'grid-cols-1 md:grid-cols-2 max-w-xl'}`}>
           
           {/* Stats block A: CLEANER schedule checking */}
-          <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-3">
-            <h3 className="text-xs font-bold text-slate-400 tracking-wider uppercase flex items-center gap-1.5">
-              <ShieldAlert className="w-3.5 h-3.5 text-red-500" />
-              清潔人員排班監控
-            </h3>
-            
-            <p className="text-xs text-slate-500 leading-relaxed">
-              根據企業政策，<strong className="text-rose-600">清潔人員 (CLEANER) 同一天最多指派 1 人排休</strong>，以維持環境現場基本工作人力：
-            </p>
+          {currentLoginUser?.role === 'ADMIN' && (
+            <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-3 animate-fade-in">
+              <h3 className="text-xs font-bold text-slate-400 tracking-wider uppercase flex items-center gap-1.5">
+                <ShieldAlert className="w-3.5 h-3.5 text-red-500" />
+                清潔人員排班監控
+              </h3>
+              
+              <p className="text-xs text-slate-500 leading-relaxed">
+                根據企業政策，<strong className="text-rose-600">清潔人員 (CLEANER) 同一天最多指派 1 人排休</strong>，以維持環境現場基本工作人力：
+              </p>
 
-            <div className="space-y-1.5 text-xs">
-              {visibleEmployees
-                .filter((emp) => emp.role === 'CLEANER')
-                .map((emp) => {
-                  const daysNum = getLeavesCountByEmp(emp.id);
-                  return (
-                    <div key={emp.id} className="flex justify-between items-center py-1 border-b border-slate-50">
-                      <span className="flex items-center gap-1">
-                        <span style={{ backgroundColor: emp.color }} className="w-2 h-2 rounded-full inline-block" />
-                        {emp.name} (清潔組)
-                      </span>
-                      <span className="font-bold text-slate-700">{daysNum} 日排休</span>
-                    </div>
-                  );
-                })}
+              <div className="space-y-1.5 text-xs">
+                {visibleEmployees
+                  .filter((emp) => emp.role === 'CLEANER')
+                  .map((emp) => {
+                    const daysNum = getLeavesCountByEmp(emp.id);
+                    return (
+                      <div key={emp.id} className="flex justify-between items-center py-1 border-b border-slate-50">
+                        <span className="flex items-center gap-1">
+                          <span style={{ backgroundColor: emp.color }} className="w-2 h-2 rounded-full inline-block" />
+                          {emp.name} (清潔組)
+                        </span>
+                        <span className="font-bold text-slate-700">{daysNum} 日排休</span>
+                      </div>
+                    );
+                  })}
+              </div>
+              
+              <div className="bg-rose-50/50 p-2.5 rounded-lg border border-rose-100 text-[10px] text-slate-500 font-sans">
+                * 超限檢測引擎於系統背景即時運行。在雙重視圖勾選假單，皆會直接攔截並封鎖第二名清潔同仁之申請。
+              </div>
             </div>
-            
-            <div className="bg-rose-50/50 p-2.5 rounded-lg border border-rose-100 text-[10px] text-slate-500 font-sans">
-              * 超限檢測引擎於系統背景即時運行。在雙重視圖勾選假單，皆會直接攔截並封鎖第二名清潔同仁之申請。
-            </div>
-          </div>
+          )}
 
           {/* Stats block B: Other Roles Summary list */}
-          <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-3">
-            <h3 className="text-xs font-bold text-slate-400 tracking-wider uppercase flex items-center gap-1.5">
-              <Sparkle className="w-3.5 h-3.5 text-indigo-500" />
-              行政、櫃台與工讀生休假
-            </h3>
+          {currentLoginUser?.role === 'ADMIN' && (
+            <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-3 animate-fade-in">
+              <h3 className="text-xs font-bold text-slate-400 tracking-wider uppercase flex items-center gap-1.5">
+                <Sparkle className="w-3.5 h-3.5 text-indigo-500" />
+                行政、櫃台與工讀生休假
+              </h3>
 
-            <p className="text-xs text-slate-500 leading-relaxed">
-              櫃台前台、主管、以及計時工讀生<strong>無每日排休人限</strong>。此為本月份 ({selectedMonth}月) 同仁累計休假落點：
-            </p>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                櫃台前台、主管、以及計時工讀生<strong>無每日排休人限</strong>。此為本月份 ({selectedMonth}月) 同仁累計休假落點：
+              </p>
 
-            <div className="max-h-[140px] overflow-y-auto space-y-1 text-xs pr-1">
-              {visibleEmployees
-                .filter((emp) => emp.role !== 'CLEANER')
-                .map((emp) => {
-                  const val = getLeavesCountByEmp(emp.id);
-                  return (
-                    <div key={emp.id} className="flex justify-between items-center py-1 border-b border-slate-50 last:border-0">
-                      <span className="flex items-center gap-1.5">
-                        <span style={{ backgroundColor: emp.color }} className="w-1.5 h-1.5 rounded-full inline-block" />
-                        {emp.name}
-                        <span className="text-[10px] scale-95 origin-left text-slate-400">({ROLE_LABELS[emp.role]})</span>
-                      </span>
-                      <span className="font-semibold text-indigo-700">{val} 日</span>
-                    </div>
-                  );
-                })}
+              <div className="max-h-[140px] overflow-y-auto space-y-1 text-xs pr-1">
+                {visibleEmployees
+                  .filter((emp) => emp.role !== 'CLEANER')
+                  .map((emp) => {
+                    const val = getLeavesCountByEmp(emp.id);
+                    return (
+                      <div key={emp.id} className="flex justify-between items-center py-1 border-b border-slate-50 last:border-0">
+                        <span className="flex items-center gap-1.5">
+                          <span style={{ backgroundColor: emp.color }} className="w-1.5 h-1.5 rounded-full inline-block" />
+                          {emp.name}
+                          <span className="text-[10px] scale-95 origin-left text-slate-400">({ROLE_LABELS[emp.role]})</span>
+                        </span>
+                        <span className="font-semibold text-indigo-700">{val} 日</span>
+                      </div>
+                    );
+                  })}
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Stats block C: Taiwan Holidays calendar helper list */}
           <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-3">
@@ -1978,6 +2148,7 @@ export default function App() {
         isOpen={isLogsOpen}
         onClose={() => setIsLogsOpen(false)}
         logs={securityLogs}
+        isAdmin={currentLoginUser?.role === 'ADMIN'}
         onClearLogs={() => {
           setSecurityLogs([
             {

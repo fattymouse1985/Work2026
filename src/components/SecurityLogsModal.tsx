@@ -7,6 +7,7 @@ interface SecurityLogsModalProps {
   onClose: () => void;
   logs: SecurityLog[];
   onClearLogs: () => void;
+  isAdmin: boolean;
 }
 
 export default function SecurityLogsModal({
@@ -14,6 +15,7 @@ export default function SecurityLogsModal({
   onClose,
   logs,
   onClearLogs,
+  isAdmin,
 }: SecurityLogsModalProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterOperator, setFilterOperator] = useState('ALL');
@@ -127,17 +129,19 @@ export default function SecurityLogsModal({
               匯出 CSV
             </button>
 
-            <button
-              onClick={() => {
-                if (window.confirm('確定要清空所有的稽核操作日誌嗎？此動作將無法復原！')) {
-                  onClearLogs();
-                }
-              }}
-              className="inline-flex items-center gap-1.5 px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-100 text-xs font-semibold rounded-lg shadow-sm transition-all cursor-pointer"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              清空
-            </button>
+            {isAdmin && (
+              <button
+                onClick={() => {
+                  if (window.confirm('確定要清空所有的稽核操作日誌嗎？此動作將無法復原！')) {
+                    onClearLogs();
+                  }
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-600 border border-rose-100 text-xs font-semibold rounded-lg shadow-sm transition-all cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                清空
+              </button>
+            )}
           </div>
         </div>
 
