@@ -57,8 +57,8 @@ import { jsPDF } from 'jspdf';
 // 您可以直接在此處填入您的金鑰預設值，或是透過環境變數 (.env) VITE_GIST_ID / VITE_GIST_PAT 帶入。
 // 系統將自動代管同步，無需員工手動輸入，且設定視窗已完全隱藏。
 // ============================================================================
-const DEFAULT_GIST_ID = (import.meta as any).env.VITE_GIST_ID || 'your_default_gist_id_here';
-const DEFAULT_GIST_PAT = (import.meta as any).env.VITE_GIST_PAT || 'your_default_pat_here';
+const DEFAULT_GIST_ID = import.meta.env.VITE_GIST_ID || 'your_default_gist_id_here';
+const DEFAULT_GIST_PAT = import.meta.env.VITE_GIST_PAT || 'your_default_pat_here';
 
 export default function App() {
   // -------------------------------------------------------------
@@ -200,6 +200,9 @@ export default function App() {
   const [isBackupOpen, setIsBackupOpen] = useState(false);
   const [isLogsOpen, setIsLogsOpen] = useState(false);
   const [isEmpManagerOpen, setIsEmpManagerOpen] = useState(false);
+  const [isAdminEditingGist, setIsAdminEditingGist] = useState(false);
+  const [adminGistIdInput, setAdminGistIdInput] = useState(() => gistConfig.gistId);
+  const [adminPatInput, setAdminPatInput] = useState(() => gistConfig.githubToken);
 
   // Leave Editor Dialog States
   const [editingDate, setEditingDate] = useState<string | null>(null);
@@ -1075,6 +1078,110 @@ export default function App() {
               )}
             </div>
           </div>
+
+          {/* Real-time sync diagnostic panel for admins */}
+          {currentLoginUser?.role === 'ADMIN' && (
+            <div className="w-full mt-2.5 p-3.5 bg-slate-50 border border-slate-200/80 rounded-xl text-xs text-slate-500 animate-fade-in shadow-xs space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/50 pb-2">
+                <div className="flex items-center gap-1.5">
+                  <span className="font-semibold text-slate-700">🔍 雲端備份金鑰設定狀態</span>
+                  <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                    gistConfig.status === 'CONNECTED' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'
+                  }`}>
+                    {gistConfig.status === 'CONNECTED' ? '已連線 (CONNECTED)' : '未設定 (UNCONFIGURED)'}
+                  </span>
+                </div>
+                
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsAdminEditingGist(!isAdminEditingGist);
+                    setAdminGistIdInput(gistConfig.gistId);
+                    setAdminPatInput(gistConfig.githubToken);
+                  }}
+                  className="px-2.5 py-1 text-[10px] font-semibold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 border border-indigo-100 rounded-md transition-colors cursor-pointer"
+                >
+                  {isAdminEditingGist ? '✕ 取消修改' : '⚙ 修改 Gist 金鑰'}
+                </button>
+              </div>
+
+              {!isAdminEditingGist ? (
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[10px] pt-0.5">
+                  <span>
+                    <strong className="text-slate-600">Gist ID:</strong>{' '}
+                    {gistConfig.gistId ? (
+                      <span className="text-emerald-600 font-bold font-mono">{gistConfig.gistId.substring(0, Math.min(gistConfig.gistId.length, 8))}...</span>
+                    ) : (
+                      <span className="text-rose-500 font-semibold">尚未設定</span>
+                    )}
+                  </span>
+                  <span className="text-slate-200">|</span>
+                  <span>
+                    <strong className="text-slate-600">GitHub PAT:</strong>{' '}
+                    {gistConfig.githubToken ? (
+                      <span className="text-emerald-600 font-bold font-mono">{gistConfig.githubToken.substring(0, Math.min(gistConfig.githubToken.length, 12))}...</span>
+                    ) : (
+                      <span className="text-rose-500 font-semibold">尚未設定</span>
+                    )}
+                  </span>
+                  {gistConfig.lastSynced && (
+                    <>
+                      <span className="text-slate-200">|</span>
+                      <span>
+                        <strong className="text-slate-600">上次同步時間:</strong>{' '}
+                        <span className="text-indigo-600 font-mono">{gistConfig.lastSynced}</span>
+                      </span>
+                    </>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-2 pt-1 animate-fade-in">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-slate-600 block">GitHub Gist ID</label>
+                      <input
+                        type="text"
+                        value={adminGistIdInput}
+                        onChange={(e) => setAdminGistIdInput(e.target.value.trim())}
+                        placeholder="填入您的 GitHub Gist ID"
+                        className="w-full px-2.5 py-1.5 text-[11px] bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-800 placeholder-slate-300 font-mono"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-slate-600 block">GitHub 存取金鑰 (PAT)</label>
+                      <input
+                        type="password"
+                        value={adminPatInput}
+                        onChange={(e) => setAdminPatInput(e.target.value.trim())}
+                        placeholder="填入您的 ghp_ 開頭個人存取密碼"
+                        className="w-full px-2.5 py-1.5 text-[11px] bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-800 placeholder-slate-300 font-mono"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-end gap-1.5 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const updated = {
+                          githubToken: adminPatInput,
+                          gistId: adminGistIdInput,
+                          lastSynced: gistConfig.lastSynced || '',
+                          status: (adminPatInput && adminGistIdInput) ? ('CONNECTED' as const) : ('UNCONFIGURED' as const)
+                        };
+                        setGistConfig(updated);
+                        localStorage.setItem('team_scheduling_gist', JSON.stringify(updated));
+                        setIsAdminEditingGist(false);
+                        showToast('金鑰更新成功！您可以立即點擊「立即同步」進行備份與載入。', false);
+                      }}
+                      className="px-3 py-1.5 text-[11px] font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors cursor-pointer"
+                    >
+                      儲存金鑰變更
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </header>
 
