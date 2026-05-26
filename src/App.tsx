@@ -52,6 +52,14 @@ import {
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 
+// ============================================================================
+// 【雲端 Gist 自動雙向同步金鑰配置區】
+// 您可以直接在此處填入您的金鑰預設值，或是透過環境變數 (.env) VITE_GIST_ID / VITE_GIST_PAT 帶入。
+// 系統將自動代管同步，無需員工手動輸入，且設定視窗已完全隱藏。
+// ============================================================================
+const DEFAULT_GIST_ID = (import.meta as any).env.VITE_GIST_ID || 'your_default_gist_id_here';
+const DEFAULT_GIST_PAT = (import.meta as any).env.VITE_GIST_PAT || 'your_default_pat_here';
+
 export default function App() {
   // -------------------------------------------------------------
   // 1. Core Reactive States & LocalStorage Persistence
@@ -72,10 +80,28 @@ export default function App() {
   });
 
   const [gistConfig, setGistConfig] = useState<GistConfig>(() => {
+    const defaultId = DEFAULT_GIST_ID !== 'your_default_gist_id_here' ? DEFAULT_GIST_ID : '';
+    const defaultPat = DEFAULT_GIST_PAT !== 'your_default_pat_here' ? DEFAULT_GIST_PAT : '';
+
     const saved = localStorage.getItem('team_scheduling_gist');
-    return saved
-      ? JSON.parse(saved)
-      : { githubToken: '', gistId: '', lastSynced: '', status: 'UNCONFIGURED' };
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      // 優先使用專案變數 / 環境變數覆蓋
+      const finalId = defaultId || parsed.gistId || '';
+      const finalPat = defaultPat || parsed.githubToken || '';
+      return {
+        githubToken: finalPat,
+        gistId: finalId,
+        lastSynced: parsed.lastSynced || '',
+        status: finalPat && finalId ? 'CONNECTED' : 'UNCONFIGURED'
+      };
+    }
+    return {
+      githubToken: defaultPat,
+      gistId: defaultId,
+      lastSynced: '',
+      status: defaultPat && defaultId ? 'CONNECTED' : 'UNCONFIGURED'
+    };
   });
 
   // Default logged in user: null, to enforce login view first upon visit (except when saved session exists)
@@ -1009,15 +1035,7 @@ export default function App() {
               <span>{isSyncingCloud ? '儲存同步中...' : '立即同步'}</span>
             </button>
 
-            {currentLoginUser?.role === 'ADMIN' && (
-              <button
-                onClick={() => setIsBackupOpen(true)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-100 rounded-lg shadow-xs transition-colors cursor-pointer"
-              >
-                <Settings className="w-3.5 h-3.5 text-indigo-600 animate-spin-slow" />
-                <span>備份與雲端同步</span>
-              </button>
-            )}
+
 
             {/* Custom User Logged In UI widget */}
             <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl p-1 pl-2.5">
