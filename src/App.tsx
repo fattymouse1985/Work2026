@@ -116,6 +116,19 @@ export default function App() {
   // Sync state to localstorage when changes occur
   useEffect(() => {
     localStorage.setItem('team_scheduling_employees', JSON.stringify(employees));
+    
+    // 每當員工名單變更，自動上傳一份備份到 Google Sheets
+    if (import.meta.env.VITE_API_URL) {
+      fetch(import.meta.env.VITE_API_URL, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'ALL_DATA_BACKUP', // 這裡設定一個全域存檔名
+          data: employees
+        })
+      }).catch(err => console.error("同步至試算表失敗:", err));
+    }
   }, [employees]);
 
   useEffect(() => {
@@ -125,10 +138,6 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('team_scheduling_logs', JSON.stringify(securityLogs));
   }, [securityLogs]);
-
-  useEffect(() => {
-    localStorage.setItem('team_scheduling_gist', JSON.stringify(gistConfig));
-  }, [gistConfig]);
 
   useEffect(() => {
     if (currentLoginUser) {
@@ -1222,9 +1231,8 @@ export default function App() {
                           status: (adminPatInput && adminGistIdInput) ? ('CONNECTED' as const) : ('UNCONFIGURED' as const)
                         };
                         setGistConfig(updated);
-                        localStorage.setItem('team_scheduling_gist', JSON.stringify(updated));
                         setIsAdminEditingGist(false);
-                        showToast('金鑰更新成功！您可以立即點擊「立即同步」進行備份與載入。', false);
+                        showToast('金鑰更新成功！您可以立即點擊進行備份與載入。', false);
                       }}
                       className="px-3 py-1.5 text-[11px] font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors cursor-pointer"
                     >
