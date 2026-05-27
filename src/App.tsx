@@ -80,8 +80,8 @@ export default function App() {
   });
 
   const [gistConfig, setGistConfig] = useState<GistConfig>(() => {
-    const defaultId = DEFAULT_GIST_ID !== 'your_default_gist_id_here' ? DEFAULT_GIST_ID : '';
-    const defaultPat = DEFAULT_GIST_PAT !== 'your_default_pat_here' ? DEFAULT_GIST_PAT : '';
+    const defaultId = (DEFAULT_GIST_ID as string) !== 'your_default_gist_id_here' ? DEFAULT_GIST_ID : '';
+    const defaultPat = (DEFAULT_GIST_PAT as string) !== 'your_default_pat_here' ? DEFAULT_GIST_PAT : '';
 
     const saved = localStorage.getItem('team_scheduling_gist');
     if (saved) {
