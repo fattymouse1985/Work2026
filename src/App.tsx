@@ -263,73 +263,27 @@ export default function App() {
     setSecurityLogs((prev) => [newLog, ...prev]);
   };
 
-  const [isSyncingCloud, setIsSyncingCloud] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [isRestoreConfirmOpen, setIsRestoreConfirmOpen] = useState(false);
 
-  const handleQuickSync = async () => {
+  const handleCloudUpload = async () => {
     if (gistConfig.status !== 'CONNECTED' || !gistConfig.githubToken || !gistConfig.gistId) {
       showToast('尚未設定或啟用 GitHub Gist 雲端連線，請聯絡系統管理員設定！', true);
       return;
     }
 
-    setIsSyncingCloud(true);
-    showToast('正在與雲端同步中...');
-    handleAddLog('一鍵雲端同步', '啟動一鍵快捷雙向數據同步程序。');
+    setIsUploading(true);
+    showToast('正在將本地資料備份並上傳至雲端中...');
+    handleAddLog('雲端備份上傳', '將本地端同仁與排休排班資料備份上傳至 GitHub Gist。');
 
     try {
-      // Step 1: PULL (GET) latest state from cloud
-      const pullRes = await fetch(`https://api.github.com/gists/${gistConfig.gistId}`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${gistConfig.githubToken}`,
-          'Accept': 'application/vnd.github+json',
-          'X-GitHub-Api-Version': '2022-11-28',
-        },
-      });
-
-      let latestEmployees = employees;
-      let latestLeaveRecords = leaveRecords;
-      let latestSecurityLogs = securityLogs;
-
-      if (pullRes.ok) {
-        const gistData = await pullRes.json();
-        const backupFile = gistData.files?.['schedule.json'];
-        if (backupFile && backupFile.content) {
-          const parsed = JSON.parse(backupFile.content);
-          if (parsed.employees && parsed.leaveRecords) {
-            latestEmployees = parsed.employees;
-            
-            // Reconcile and merge by ID
-            const cloudRcMap = new Map(parsed.leaveRecords.map((r: any) => [r.id, r]));
-            const localRcMap = new Map(leaveRecords.map((r: any) => [r.id, r]));
-            const combinedRecords = Array.from(new Set([...leaveRecords, ...parsed.leaveRecords].map(r => r.id)))
-              .map(id => localRcMap.get(id) || cloudRcMap.get(id))
-              .filter(Boolean) as LeaveRecord[];
-            
-            latestLeaveRecords = combinedRecords;
-
-            const cloudLogMap = new Map((parsed.securityLogs || []).map((l: any) => [l.id, l]));
-            const localLogMap = new Map(securityLogs.map((l: any) => [l.id, l]));
-            const combinedLogs = Array.from(new Set([...securityLogs, ...(parsed.securityLogs || [])].map(l => l.id)))
-              .map(id => localLogMap.get(id) || cloudLogMap.get(id))
-              .filter(Boolean) as SecurityLog[];
-            combinedLogs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-            
-            latestSecurityLogs = combinedLogs;
-
-            setEmployees(latestEmployees);
-            setLeaveRecords(latestLeaveRecords);
-            setSecurityLogs(latestSecurityLogs);
-          }
-        }
-      }
-
-      // Step 2: PUSH (PATCH) reconciled state to Gist
       const stateToBackup = {
         version: '1.0',
         lastUpdated: new Date().toISOString(),
-        employees: latestEmployees,
-        leaveRecords: latestLeaveRecords,
-        securityLogs: latestSecurityLogs,
+        employees: employees,
+        leaveRecords: leaveRecords,
+        securityLogs: securityLogs,
       };
 
       const payload = {
@@ -363,13 +317,72 @@ export default function App() {
         status: 'CONNECTED',
       }));
 
-      handleAddLog('一鍵雲端同步成功', '成功完成快捷雙向數據同步。');
-      showToast('雙向雲端資料同步成功！');
+      handleAddLog('雲端備份成功', '成功將本地最新同仁及排休資料覆蓋備份至雲端。');
+      showToast('資料已成功備份上傳至雲端！');
     } catch (err: any) {
-      handleAddLog('一鍵雲端同步失敗', `快捷同步錯誤：${err.message || err}`);
-      showToast(`同步失敗：${err.message || '連線中斷'}`, true);
+      handleAddLog('雲端備份上傳失敗', `備份上傳錯誤：${err.message || err}`);
+      showToast(`備份上傳失敗：${err.message || '連線中斷'}`, true);
     } finally {
-      setIsSyncingCloud(false);
+      setIsUploading(false);
+    }
+  };
+
+  const handleCloudDownload = async () => {
+    if (gistConfig.status !== 'CONNECTED' || !gistConfig.githubToken || !gistConfig.gistId) {
+      showToast('尚未設定或啟用 GitHub Gist 雲端連線，請聯絡系統管理員設定！', true);
+      return;
+    }
+
+    setIsDownloading(true);
+    showToast('正在自雲端下載最新備份資料...');
+    handleAddLog('雲端下載資料', '啟動從 GitHub Gist 下載雲端備份回復程序。');
+
+    try {
+      const pullRes = await fetch(`https://api.github.com/gists/${gistConfig.gistId}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${gistConfig.githubToken}`,
+          'Accept': 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28',
+        },
+      });
+
+      if (!pullRes.ok) {
+        throw new Error(`雲端讀取失敗 (狀態碼: ${pullRes.status})`);
+      }
+
+      const gistData = await pullRes.json();
+      const backupFile = gistData.files?.['schedule.json'];
+      if (!backupFile || !backupFile.content) {
+        throw new Error('雲端找不到備份檔案 schedule.json！');
+      }
+
+      const parsed = JSON.parse(backupFile.content);
+      if (!parsed.employees || !parsed.leaveRecords) {
+        throw new Error('雲端備份檔案格式不正確，缺少同仁或排休資料！');
+      }
+
+      setEmployees(parsed.employees);
+      setLeaveRecords(parsed.leaveRecords);
+      if (parsed.securityLogs) {
+        setSecurityLogs(parsed.securityLogs);
+      }
+
+      const syncTime = new Date().toLocaleString();
+      setGistConfig(prev => ({
+        ...prev,
+        lastSynced: syncTime,
+        status: 'CONNECTED',
+      }));
+
+      handleAddLog('雲端還原成功', '成功從雲端回復資料至本地端，完全覆蓋舊資料。');
+      showToast('雲端備份資料已成功下載並還原至本地端！');
+    } catch (err: any) {
+      handleAddLog('雲端回復失敗', `雲端資料下載失敗：${err.message || err}`);
+      showToast(`下載還原失敗：${err.message || '連線中斷'}`, true);
+    } finally {
+      setIsDownloading(false);
+      setIsRestoreConfirmOpen(false);
     }
   };
 
@@ -1036,25 +1049,46 @@ export default function App() {
               <span>操作日誌</span>
             </button>
 
-            {/* 立即同步按鈕：對所有同仁一律顯示，未設定時點擊提示引導 */}
+            {/* 備份上傳按鈕 */}
             <button
               onClick={() => {
                 if (gistConfig.status !== 'CONNECTED') {
                   showToast('請聯絡系統管理員設定 GitHub Gist 雲端同步金鑰以啟用此功能！', true);
                   return;
                 }
-                handleQuickSync();
+                handleCloudUpload();
               }}
-              disabled={isSyncingCloud}
+              disabled={isUploading || isDownloading}
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg shadow-xs transition-colors cursor-pointer ${
                 gistConfig.status === 'CONNECTED'
                   ? 'text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200'
                   : 'text-slate-400 bg-slate-100 hover:bg-slate-200 border border-slate-200'
               }`}
-              title={gistConfig.status === 'CONNECTED' ? '與雲端 Gist 執行雙向備份與數據同步' : '未設定雲端同步，點按獲取詳情'}
+              title={gistConfig.status === 'CONNECTED' ? '將本地最新資料備份並上傳至雲端（不會覆蓋本地）' : '未設定雲端同步，點按獲取詳情'}
             >
-              <RefreshCcw className={`w-3.5 h-3.5 ${gistConfig.status === 'CONNECTED' ? 'text-emerald-600' : 'text-slate-400'} ${isSyncingCloud ? 'animate-spin' : ''}`} />
-              <span>{isSyncingCloud ? '儲存同步中...' : '立即同步'}</span>
+              <Upload className={`w-3.5 h-3.5 ${gistConfig.status === 'CONNECTED' ? 'text-emerald-600' : 'text-slate-400'} ${isUploading ? 'animate-bounce' : ''}`} />
+              <span>{isUploading ? '正在上傳...' : '備份上傳'}</span>
+            </button>
+
+            {/* 下載還原按鈕 */}
+            <button
+              onClick={() => {
+                if (gistConfig.status !== 'CONNECTED') {
+                  showToast('請聯絡系統管理員設定 GitHub Gist 雲端同步金鑰以啟用此功能！', true);
+                  return;
+                }
+                setIsRestoreConfirmOpen(true);
+              }}
+              disabled={isUploading || isDownloading}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg shadow-xs transition-colors cursor-pointer ${
+                gistConfig.status === 'CONNECTED'
+                  ? 'text-indigo-700 bg-indigo-50 hover:bg-indigo-105 border border-indigo-200'
+                  : 'text-slate-400 bg-slate-100 hover:bg-slate-200 border border-slate-200'
+              }`}
+              title={gistConfig.status === 'CONNECTED' ? '從雲端下載最新備份回復至本地端（會完全覆蓋本地）' : '未設定雲端同步，點按獲取詳情'}
+            >
+              <Download className={`w-3.5 h-3.5 ${gistConfig.status === 'CONNECTED' ? 'text-indigo-600' : 'text-slate-400'} ${isDownloading ? 'animate-pulse' : ''}`} />
+              <span>{isDownloading ? '正在下載...' : '下載還原'}</span>
             </button>
 
 
@@ -2318,6 +2352,69 @@ export default function App() {
         onUpdateEmployees={(newStaffList) => setEmployees(newStaffList)}
         onAddLog={handleAddLog}
       />
+
+      {/* -------------------------------------------------------------
+          15. CLOUD RESTORE CONFIRMATION MODAL
+          ------------------------------------------------------------- */}
+      {isRestoreConfirmOpen && (
+        <div id="restore-confirm-modal" className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-white rounded-2xl shadow-xl border border-slate-100 max-w-md w-full p-6 animate-scale-in space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="p-2.5 bg-amber-50 rounded-xl text-amber-600 shrink-0">
+                <AlertCircle className="w-6 h-6 animate-pulse" />
+              </div>
+              <div className="space-y-1.5">
+                <h3 className="text-base font-bold text-slate-900">載入雲端備份警告</h3>
+                <p className="text-xs text-slate-500 leading-relaxed">
+                  這將從雲端 GitHub Gist 下載最新的備份檔案（含所有同仁名單、排休紀錄與日誌），並<strong className="text-rose-600 font-bold">完全覆蓋</strong>您目前在本地端（LocalStorage）中編輯的資料。
+                </p>
+                <p className="text-xs font-semibold text-rose-500">
+                  ※ 此操作不可逆，尚未備份之本地端變更將會遺失！
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 p-3 rounded-lg border border-slate-100 space-y-1">
+              <div className="text-[10px] text-slate-400 font-bold block uppercase tracking-wide">目前雲端設定狀態</div>
+              <div className="text-xs text-slate-600 font-mono flex justify-between">
+                <span>Gist ID:</span>
+                <span className="font-bold">{gistConfig.gistId ? `${gistConfig.gistId.slice(0, 10)}...` : '未設定'}</span>
+              </div>
+              {gistConfig.lastSynced && (
+                <div className="text-xs text-slate-600 font-mono flex justify-between">
+                  <span>上次備份時間:</span>
+                  <span className="font-bold text-indigo-600">{gistConfig.lastSynced}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-1.5">
+              <button
+                type="button"
+                onClick={() => setIsRestoreConfirmOpen(false)}
+                className="px-4 py-2 text-xs font-semibold text-slate-500 hover:text-slate-700 bg-slate-100 hover:bg-slate-150 rounded-lg transition-colors cursor-pointer"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={isDownloading}
+                onClick={handleCloudDownload}
+                className="px-4 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 rounded-lg shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer"
+              >
+                {isDownloading ? (
+                  <>
+                    <RefreshCcw className="w-3.5 h-3.5 animate-spin" />
+                    <span>讀取還原中...</span>
+                  </>
+                ) : (
+                  <span>確定下載並完全覆蓋</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );
