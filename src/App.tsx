@@ -57,8 +57,8 @@ import { jsPDF } from 'jspdf';
 // 您可以直接在此處填入您的金鑰預設值，或是透過環境變數 (.env) VITE_GIST_ID / VITE_GIST_PAT 帶入。
 // 系統將自動代管同步，無需員工手動輸入，且設定視窗已完全隱藏。
 // ============================================================================
-const DEFAULT_GIST_ID = ''; 
-const DEFAULT_GIST_PAT = '';
+const DEFAULT_GIST_ID = import.meta.env.VITE_GIST_ID || ''; 
+const DEFAULT_GIST_PAT = import.meta.env.VITE_GIST_PAT || '';
 
 export default function App() {
   // -------------------------------------------------------------
@@ -203,6 +203,25 @@ export default function App() {
   const [isAdminEditingGist, setIsAdminEditingGist] = useState(false);
   const [adminGistIdInput, setAdminGistIdInput] = useState(() => gistConfig.gistId);
   const [adminPatInput, setAdminPatInput] = useState(() => gistConfig.githubToken);
+
+  // 在 App.tsx 的 useEffect 中，確保加上這一小段來讀取 Vercel 與環境變數：
+  useEffect(() => {
+    const gistId = import.meta.env.VITE_GIST_ID;
+    const gistPat = import.meta.env.VITE_GIST_PAT;
+
+    // 強制檢查環境變數並啟動同步
+    if (gistId && gistPat) {
+      console.log("偵測到環境變數，準備連線...");
+      setGistConfig((prev) => ({
+        ...prev,
+        gistId,
+        githubToken: gistPat,
+        status: 'CONNECTED'
+      }));
+      setAdminGistIdInput(gistId);
+      setAdminPatInput(gistPat);
+    }
+  }, []);
 
   // Leave Editor Dialog States
   const [editingDate, setEditingDate] = useState<string | null>(null);
