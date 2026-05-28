@@ -647,8 +647,10 @@ export default function App() {
   // 7. Action Handlers: Date Cell Clicking
   // -------------------------------------------------------------
   const handleDateClick = async (dateStr: string) => {
-    // 如果目前正在鎖定中，直接攔截不反應
-    if (isSyncing) return;
+    const isAdmin = currentLoginUser?.role === 'ADMIN' || currentLoginUser?.name === '管理員';
+
+    // 如果是一般員工，且系統正在鎖定中，直接攔截不反應
+    if (!isAdmin && isSyncing) return;
 
     if (!currentLoginUser) {
       handleOpenAuthPanel();
@@ -667,8 +669,10 @@ export default function App() {
       const targetEmp = employees.find((e) => e.id === targetEmpId);
       if (!targetEmp) return;
 
-      // 啟動螢幕鎖定動畫
-      setIsSyncing(true);
+      // 如果是一般員工，才啟動螢幕鎖定轉圈圈
+      if (!isAdmin) {
+        setIsSyncing(true);
+      }
 
       try {
         // Check if already on leave
@@ -694,7 +698,9 @@ export default function App() {
               `排班限制：外勤人員每日上限 1 人！${dateStr} 已有「${check.activeCleanerName}」休假`,
               true
             );
-            setIsSyncing(false);
+            if (!isAdmin) {
+              setIsSyncing(false);
+            }
             return;
           }
 
@@ -723,10 +729,9 @@ export default function App() {
       } catch (err) {
         console.error("排班同步失敗:", err);
       } finally {
-        // ⏳ 滿 1.5 秒（1500毫秒）後，自動解開螢幕鎖定
-        setTimeout(() => {
+        if (!isAdmin) {
           setIsSyncing(false);
-        }, 1500);
+        }
       }
       return;
     }
