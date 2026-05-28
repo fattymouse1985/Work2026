@@ -45,7 +45,8 @@ import {
   ChevronRight,
   HelpCircle,
   Clock,
-  Sparkle
+  Sparkle,
+  Loader2
 } from 'lucide-react';
 
 import html2canvas from 'html2canvas';
@@ -89,6 +90,9 @@ export default function App() {
     }
     return null; // Require login initially
   });
+
+  // ⚡ 新增：全螢幕鎖定同步狀態
+  const [isSyncing, setIsSyncing] = useState<boolean>(false);
 
   // 使用 useRef 鎖定最新的狀態，避免輪詢或背景同步時抓到舊的 state
   const employeesRef = useRef(employees);
@@ -642,7 +646,10 @@ export default function App() {
   // -------------------------------------------------------------
   // 7. Action Handlers: Date Cell Clicking
   // -------------------------------------------------------------
-  const handleDateClick = (dateStr: string) => {
+  const handleDateClick = async (dateStr: string) => {
+    // 如果目前正在鎖定中，直接攔截不反應
+    if (isSyncing) return;
+
     if (!currentLoginUser) {
       handleOpenAuthPanel();
       return;
@@ -660,50 +667,66 @@ export default function App() {
       const targetEmp = employees.find((e) => e.id === targetEmpId);
       if (!targetEmp) return;
 
-      // Check if already on leave
-      const existing = leaveRecords.find(
-        (lr) => lr.date === dateStr && lr.employeeId === targetEmpId
-      );
+      // 啟動螢幕鎖定動畫
+      setIsSyncing(true);
 
-      if (existing) {
-        // Remove leave
-        const remaining = leaveRecords.filter((lr) => lr.id !== existing.id);
-        setLeaveRecords(remaining);
-        handleAddLog(
-          '取消休假(快捷)',
-          `移除「${targetEmp.name}」於 ${dateStr} 的排休。`
+      try {
+        // Check if already on leave
+        const existing = leaveRecords.find(
+          (lr) => lr.date === dateStr && lr.employeeId === targetEmpId
         );
-        showToast(`已為 ${targetEmp.name} 取消 ${dateStr} 的休假`);
-        syncChangeToGoogleSheets(remaining, targetEmp.name);
-      } else {
-        // Add leave -> Validation limit!
-        const check = checkCleanerLimit(dateStr, targetEmpId);
-        if (!check.allowed) {
-          showToast(
-            `排班限制：外勤人員每日上限 1 人！${dateStr} 已有「${check.activeCleanerName}」休假`,
-            true
+
+        if (existing) {
+          // Remove leave
+          const remaining = leaveRecords.filter((lr) => lr.id !== existing.id);
+          setLeaveRecords(remaining);
+          handleAddLog(
+            '取消休假(快捷)',
+            `移除「${targetEmp.name}」於 ${dateStr} 的排休。`
           );
-          return;
+          showToast(`已為 ${targetEmp.name} 取消 ${dateStr} 的休假`);
+          await syncChangeToGoogleSheets(remaining, targetEmp.name);
+        } else {
+          // Add leave -> Validation limit!
+          const check = checkCleanerLimit(dateStr, targetEmpId);
+          if (!check.allowed) {
+            showToast(
+              `排班限制：外勤人員每日上限 1 人！${dateStr} 已有「${check.activeCleanerName}」休假`,
+              true
+            );
+            setIsSyncing(false);
+            return;
+          }
+
+          const newRecord: LeaveRecord = {
+            id: `lr-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+            employeeId: targetEmpId,
+            employeeName: targetEmp.name,
+            role: targetEmp.role,
+            date: dateStr,
+            type: quickLeaveType,
+            note: '快捷鍵建立',
+          };
+
+          const updated = [...leaveRecords, newRecord];
+          setLeaveRecords(updated);
+          handleAddLog(
+            '設定休假(快捷)',
+            `為「${targetEmp.name}」排定 ${dateStr} 為【${quickLeaveType}】。`
+          );
+          showToast(`已為 ${targetEmp.name} 登記 ${dateStr}【${quickLeaveType}】`);
+          await syncChangeToGoogleSheets(updated, targetEmp.name);
         }
 
-        const newRecord: LeaveRecord = {
-          id: `lr-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
-          employeeId: targetEmpId,
-          employeeName: targetEmp.name,
-          role: targetEmp.role,
-          date: dateStr,
-          type: quickLeaveType,
-          note: '快捷鍵建立',
-        };
-
-        const updated = [...leaveRecords, newRecord];
-        setLeaveRecords(updated);
-        handleAddLog(
-          '設定休假(快捷)',
-          `為「${targetEmp.name}」排定 ${dateStr} 為【${quickLeaveType}】。`
-        );
-        showToast(`已為 ${targetEmp.name} 登記 ${dateStr}【${quickLeaveType}】`);
-        syncChangeToGoogleSheets(updated, targetEmp.name);
+        // 強制讀取雲端最新狀態，確保對齊
+        await loadDataFromSheets(true);
+      } catch (err) {
+        console.error("排班同步失敗:", err);
+      } finally {
+        // ⏳ 滿 1.5 秒（1500毫秒）後，自動解開螢幕鎖定
+        setTimeout(() => {
+          setIsSyncing(false);
+        }, 1500);
       }
       return;
     }
@@ -1054,6 +1077,17 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-800 flex flex-col font-sans relative pb-12 antialiased">
+      {/* 🚀 這裡就是全螢幕鎖定 (Loading Overlay) 的神盾級保護 */}
+      {isSyncing && (
+        <div className="fixed inset-0 bg-white/75 backdrop-blur-md flex flex-col justify-center items-center z-[99999] cursor-not-allowed">
+          <div className="bg-white px-10 py-6 rounded-2xl shadow-xl border border-slate-100 flex flex-col items-center gap-4">
+            <Loader2 className="w-10 h-10 text-blue-600 animate-spin" />
+            <span className="text-base font-extrabold text-slate-800 tracking-wide">
+              排班即時同步中，請稍候...
+            </span>
+          </div>
+        </div>
+      )}
       {/* -------------------------------------------------------------
           TOP FIXED NAVIGATION HEADER (BENTO RAIL)
           ------------------------------------------------------------- */}
