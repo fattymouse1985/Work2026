@@ -90,6 +90,23 @@ export default function App() {
     return null; // Require login initially
   });
 
+  // 使用 useRef 鎖定最新的狀態，避免輪詢或背景同步時抓到舊的 state
+  const employeesRef = useRef(employees);
+  const leaveRecordsRef = useRef(leaveRecords);
+  const securityLogsRef = useRef(securityLogs);
+
+  useEffect(() => {
+    employeesRef.current = employees;
+  }, [employees]);
+
+  useEffect(() => {
+    leaveRecordsRef.current = leaveRecords;
+  }, [leaveRecords]);
+
+  useEffect(() => {
+    securityLogsRef.current = securityLogs;
+  }, [securityLogs]);
+
   const loadLocalBackup = () => {
     const localEmp = localStorage.getItem('team_scheduling_employees');
     const localLeave = localStorage.getItem('team_scheduling_leaves');
@@ -99,73 +116,98 @@ export default function App() {
     if (localLogs) setSecurityLogs(JSON.parse(localLogs));
   };
 
-  // 1. 初始化：從 Google Sheets 載入所有資料
+  // 1. 核心功能 1：從雲端試算表「下載並讀取」最新資料的函式
+  const loadDataFromSheets = async (isBackground = false) => {
+    if (!apiUrl) return;
+    try {
+      if (!isBackground) {
+        setStatus('雲端資料同步中...');
+      }
+      
+      const response = await fetch(apiUrl);
+      const cloudData = await response.json();
+      
+      if (cloudData) {
+        // A. 處理員工名單
+        if (cloudData.EMPLOYEES && Array.isArray(cloudData.EMPLOYEES)) {
+          if (JSON.stringify(cloudData.EMPLOYEES) !== JSON.stringify(employeesRef.current)) {
+            setEmployees(cloudData.EMPLOYEES);
+          }
+        }
+        
+        // B. 處理假單紀錄
+        let parsedLeaves: LeaveRecord[] = [];
+        if (cloudData.LEAVE_RECORDS) {
+          if (Array.isArray(cloudData.LEAVE_RECORDS)) {
+            parsedLeaves = cloudData.LEAVE_RECORDS;
+          } else if (typeof cloudData.LEAVE_RECORDS === 'object') {
+            const flatLeaves: LeaveRecord[] = [];
+            Object.entries(cloudData.LEAVE_RECORDS).forEach(([empName, records]) => {
+              const emp = employeesRef.current.find(e => e.name === empName);
+              if (Array.isArray(records)) {
+                records.forEach((rec: any, idx: number) => {
+                  flatLeaves.push({
+                    id: rec.id || `lr-${empName}-${rec.date}-${idx}`,
+                    employeeId: emp?.id || empName,
+                    employeeName: empName,
+                    role: emp?.role || 'CLEANER',
+                    date: rec.date,
+                    type: rec.type || '排休',
+                    note: rec.note || '',
+                  });
+                });
+              }
+            });
+            parsedLeaves = flatLeaves;
+          }
+        }
+        
+        if (JSON.stringify(parsedLeaves) !== JSON.stringify(leaveRecordsRef.current)) {
+          setLeaveRecords(parsedLeaves);
+        }
+
+        // C. 處理操作日誌
+        if (cloudData.SECURITY_LOGS && Array.isArray(cloudData.SECURITY_LOGS)) {
+          if (JSON.stringify(cloudData.SECURITY_LOGS) !== JSON.stringify(securityLogsRef.current)) {
+            setSecurityLogs(cloudData.SECURITY_LOGS);
+          }
+        }
+        
+        const syncTime = new Date().toLocaleString();
+        setLastSynced(syncTime);
+        localStorage.setItem('team_scheduling_last_synced', syncTime);
+        setStatus('Google 試算表雙軌同步已連線 (CONNECTED)');
+      } else {
+        if (!isBackground) {
+          loadLocalBackup();
+          setStatus('試算表無資料，已載入本地暫存');
+        }
+      }
+    } catch (error) {
+      console.error("背景自動讀取失敗:", error);
+      if (!isBackground) {
+        loadLocalBackup();
+        setStatus('連線失敗，已切換至離線暫存模式');
+      }
+    }
+  };
+
+  // 2. 核心功能 2：網頁初始化，並設定「每 3 秒自動下載更新」的定時器
   useEffect(() => {
     // 優先讀取登入狀態
     const savedUser = localStorage.getItem('team_scheduling_login_user');
     if (savedUser) setCurrentLoginUser(JSON.parse(savedUser));
 
-    if (!apiUrl) {
-      setStatus('錯誤：未設定 VITE_API_URL 環境變數');
-      loadLocalBackup();
-      return;
-    }
+    // 1. 網頁一打開，立刻進行第一次完整下載
+    loadDataFromSheets(false);
 
-    const loadDataFromSheets = async () => {
-      try {
-        setStatus('雲端資料同步中...');
-        const response = await fetch(apiUrl);
-        const cloudData = await response.json();
-        
-        if (cloudData) {
-          // 解析 Google Sheets 的雙軌整合資料
-          if (cloudData.EMPLOYEES && Array.isArray(cloudData.EMPLOYEES)) {
-            setEmployees(cloudData.EMPLOYEES);
-          }
-          if (cloudData.LEAVE_RECORDS) {
-            if (Array.isArray(cloudData.LEAVE_RECORDS)) {
-              setLeaveRecords(cloudData.LEAVE_RECORDS);
-            } else if (typeof cloudData.LEAVE_RECORDS === 'object') {
-              const flatLeaves: LeaveRecord[] = [];
-              Object.entries(cloudData.LEAVE_RECORDS).forEach(([empName, records]) => {
-                const emp = employees.find(e => e.name === empName);
-                if (Array.isArray(records)) {
-                  records.forEach((rec: any, idx: number) => {
-                    flatLeaves.push({
-                      id: rec.id || `lr-${empName}-${rec.date}-${idx}`,
-                      employeeId: emp?.id || empName,
-                      employeeName: empName,
-                      role: emp?.role || 'CLEANER',
-                      date: rec.date,
-                      type: rec.type || '排休',
-                      note: rec.note || '',
-                    });
-                  });
-                }
-              });
-              setLeaveRecords(flatLeaves);
-            }
-          }
-          if (cloudData.SECURITY_LOGS && Array.isArray(cloudData.SECURITY_LOGS)) {
-            setSecurityLogs(cloudData.SECURITY_LOGS);
-          }
-          
-          setStatus('Google 試算表雙軌同步已連線 (CONNECTED)');
-          const syncTime = new Date().toLocaleString();
-          setLastSynced(syncTime);
-          localStorage.setItem('team_scheduling_last_synced', syncTime);
-        } else {
-          loadLocalBackup();
-          setStatus('試算表無資料，已載入本地暫存');
-        }
-      } catch (error) {
-        console.error("讀取 Google Sheets 失敗:", error);
-        loadLocalBackup();
-        setStatus('連線失敗，已切換至離線暫存模式');
-      }
-    };
+    // 2. ⚡ 開啟每 3 秒自動背景下載機制 (設定為 3000 毫秒最穩定，不易被 Google 封鎖限制)
+    const intervalId = setInterval(() => {
+      loadDataFromSheets(true); // 傳入 true 默默刷新
+    }, 3000);
 
-    loadDataFromSheets();
+    // 當網頁關閉時清除定時器
+    return () => clearInterval(intervalId);
   }, [apiUrl]);
 
   // Sync state to localstorage when changes occur
