@@ -218,15 +218,19 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('team_scheduling_employees', JSON.stringify(employees));
     
-    // 每當員工名單變更，自動上傳一份備份到 Google Sheets
+    // 每當員工名單變更，自動上傳一份備份到 Google Sheets (採用標準全量對齊結構)
     if (import.meta.env.VITE_API_URL) {
       fetch(import.meta.env.VITE_API_URL, {
         method: 'POST',
         mode: 'no-cors',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: 'ALL_DATA_BACKUP', // 這裡設定一個全域存檔名
-          data: employees
+          name: 'EMPLOYEE_MEMBER_MUTATION',
+          all_data: {
+            EMPLOYEES: employees,
+            LEAVE_RECORDS: leaveRecordsRef.current,
+            SECURITY_LOGS: securityLogsRef.current,
+          }
         })
       }).catch(err => console.error("同步至試算表失敗:", err));
     }
@@ -340,7 +344,7 @@ export default function App() {
   // -------------------------------------------------------------
   // 3. Operation Logs Helper
   // -------------------------------------------------------------
-  const handleAddLog = (action: string, details: string) => {
+  const handleAddLog = (action: string, details: string, shouldSyncNow: boolean = false) => {
     const newLog: SecurityLog = {
       id: `log-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
       timestamp: new Date().toISOString(),
@@ -348,39 +352,56 @@ export default function App() {
       action,
       details,
     };
-    setSecurityLogs((prev) => [newLog, ...prev]);
+    const updated = [newLog, ...securityLogsRef.current];
+    securityLogsRef.current = updated;
+    localStorage.setItem('team_scheduling_logs', JSON.stringify(updated));
+    setSecurityLogs(updated);
+
+    if (shouldSyncNow && apiUrl) {
+      // 獨立背景立即更新操作日誌，確保即使沒點擊排休，一般操作（登入/登出等）日誌也有即時同步不被覆蓋
+      syncAllDataToGoogleSheets('自動日誌上傳:' + action);
+    }
   };
 
   const [isUploading, setIsUploading] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
   const [isRestoreConfirmOpen, setIsRestoreConfirmOpen] = useState(false);
 
-  // 2. 獨立單點上傳：當員工點選假單時，立刻同步該變更
-  const syncChangeToGoogleSheets = async (updatedLeaves: LeaveRecord[], targetEmployeeName: string) => {
+  // 2. 獨立同步：當排班或權限有異動時，立刻完整同步，使用 Ref 防閉包 stale 舊狀態
+  const syncAllDataToGoogleSheets = async (
+    targetName: string,
+    customLeaves?: LeaveRecord[],
+    customEmployees?: Employee[]
+  ) => {
     if (!apiUrl) return;
     try {
-      localStorage.setItem('team_scheduling_leaves', JSON.stringify(updatedLeaves));
-      
+      const targetLeaves = customLeaves || leaveRecordsRef.current;
+      const targetEmployees = customEmployees || employeesRef.current;
+      const targetLogs = securityLogsRef.current;
+
+      localStorage.setItem('team_scheduling_leaves', JSON.stringify(targetLeaves));
+      localStorage.setItem('team_scheduling_employees', JSON.stringify(targetEmployees));
+      localStorage.setItem('team_scheduling_logs', JSON.stringify(targetLogs));
+
       await fetch(apiUrl, {
         method: 'POST',
         mode: 'no-cors', // 確保跨網域不會被攔截
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: targetEmployeeName,
-          // 把整包最新的 LEAVE_RECORDS 與名單打包傳送，由 GAS 進行行級鎖定更新
+          name: targetName,
           all_data: {
-            EMPLOYEES: employees,
-            LEAVE_RECORDS: updatedLeaves,
-            SECURITY_LOGS: securityLogs
-          }
-        })
+            EMPLOYEES: targetEmployees,
+            LEAVE_RECORDS: targetLeaves,
+            SECURITY_LOGS: targetLogs,
+          },
+        }),
       });
-      console.log(`${targetEmployeeName} 的排班已即時獨立同步至 Google Sheets`);
+      console.log(`[Sync] ${targetName} 完竣，資料集與操作日誌已同步 Google Sheets`);
       const syncTime = new Date().toLocaleString();
       setLastSynced(syncTime);
       localStorage.setItem('team_scheduling_last_synced', syncTime);
     } catch (error) {
-      console.error("即時同步至 Google Sheets 失敗:", error);
+      console.error("同步至 Google Sheets 失敗:", error);
     }
   };
 
@@ -402,9 +423,9 @@ export default function App() {
         body: JSON.stringify({
           name: 'ALL_DATA_BACKUP',
           all_data: {
-            EMPLOYEES: employees,
-            LEAVE_RECORDS: leaveRecords,
-            SECURITY_LOGS: securityLogs,
+            EMPLOYEES: employeesRef.current,
+            LEAVE_RECORDS: leaveRecordsRef.current,
+            SECURITY_LOGS: securityLogsRef.current,
           }
         })
       });
@@ -624,20 +645,20 @@ export default function App() {
     if (emp.password === authPasswordInput) {
       setCurrentLoginUser(emp);
       setIsAuthPanelOpen(false);
-      handleAddLog('帳身安全登入', `人員「${emp.name}」登入系統成功，取得其作業權限。`);
+      handleAddLog('帳身安全登入', `人員「${emp.name}」登入系統成功，取得其作業權限。`, true);
       showToast(`登入成功！當前操作者：${emp.name} (${ROLE_LABELS[emp.role]})`);
 
       // Sync default quick target employee to the newly logged in user
       setQuickTargetEmpId(emp.id);
     } else {
       setAuthError('密碼錯誤！請輸入該人員之正確 4 位數密碼代口令。');
-      handleAddLog('登入失敗嘗試', `試圖登入「${emp.name}」但密碼口令驗證失敗。`);
+      handleAddLog('登入失敗嘗試', `試圖登入「${emp.name}」但密碼口令驗證失敗。`, true);
     }
   };
 
   const handleLogout = () => {
     if (currentLoginUser) {
-      handleAddLog('帳身安全登出', `人員「${currentLoginUser.name}」登出系統。`);
+      handleAddLog('帳身安全登出', `人員「${currentLoginUser.name}」登出系統。`, true);
       showToast(`已登出人員身分，返回訪客唯讀。`);
     }
     setCurrentLoginUser(null);
@@ -689,7 +710,7 @@ export default function App() {
             `移除「${targetEmp.name}」於 ${dateStr} 的排休。`
           );
           showToast(`已為 ${targetEmp.name} 取消 ${dateStr} 的休假`);
-          await syncChangeToGoogleSheets(remaining, targetEmp.name);
+          await syncAllDataToGoogleSheets(targetEmp.name, remaining);
         } else {
           // Add leave -> Validation limit!
           const check = checkCleanerLimit(dateStr, targetEmpId);
@@ -721,7 +742,7 @@ export default function App() {
             `為「${targetEmp.name}」排定 ${dateStr} 為【${quickLeaveType}】。`
           );
           showToast(`已為 ${targetEmp.name} 登記 ${dateStr}【${quickLeaveType}】`);
-          await syncChangeToGoogleSheets(updated, targetEmp.name);
+          await syncAllDataToGoogleSheets(targetEmp.name, updated);
         }
 
         // 強制讀取雲端最新狀態，確保對齊
@@ -826,7 +847,6 @@ export default function App() {
     }
 
     setLeaveRecords(updatedLeavesList);
-    syncChangeToGoogleSheets(updatedLeavesList, currentLoginUser?.name || '管理員設定');
 
     // Build operational audit log description
     let logsText = '';
@@ -842,6 +862,7 @@ export default function App() {
       showToast(`已成功保存其休假調度安排`);
     }
 
+    syncAllDataToGoogleSheets(currentLoginUser?.name || '管理員設定', updatedLeavesList);
     setEditingDate(null);
   };
 
@@ -850,9 +871,9 @@ export default function App() {
     if (!window.confirm(`確定要清除 ${dateStr} 所有登記的團隊假單嗎？`)) return;
     const remaining = leaveRecords.filter((lr) => lr.date !== dateStr);
     setLeaveRecords(remaining);
-    syncChangeToGoogleSheets(remaining, '全體清除-' + dateStr);
     handleAddLog('清空單日排休', `已完整清除 ${dateStr} 上登錄的所有假單紀錄。`);
     showToast(`已清空 ${dateStr} 的排班`);
+    syncAllDataToGoogleSheets('全體清除-' + dateStr, remaining);
     setEditingDate(null);
   };
 
@@ -864,7 +885,7 @@ export default function App() {
     if (!sourceNode) return;
 
     setIsExporting(true);
-    handleAddLog('呼叫 A4 報表導出', `嘗試產生 ${selectedYear} 年 ${selectedMonth} 月 A4 PDF 列印單。`);
+    handleAddLog('呼叫 A4 報表導出', `嘗試產生 ${selectedYear} 年 ${selectedMonth} 月 A4 PDF 列印單。`, true);
     showToast('正在優雅生成高解析度月度排班表及下載 PDF，請稍候...');
 
     try {
@@ -947,11 +968,11 @@ export default function App() {
       }
 
       pdf.save(`團隊排班表_${selectedYear}年${selectedMonth}月.pdf`);
-      handleAddLog('匯出 PDF 成功', `成功下載PDF：團隊排班表_${selectedYear}年${selectedMonth}月.pdf。`);
+      handleAddLog('匯出 PDF 成功', `成功下載PDF：團隊排班表_${selectedYear}年${selectedMonth}月.pdf。`, true);
       showToast('PDF 排班表已成功生成並下載！');
     } catch (err: any) {
       console.error(err);
-      handleAddLog('匯出 PDF 失敗', `系統錯誤：${err.message || err}`);
+      handleAddLog('匯出 PDF 失敗', `系統錯誤：${err.message || err}`, true);
       showToast('PDF 下載失敗，請試試 Ctrl+P 手動列印。', true);
     } finally {
       setIsExporting(false);
