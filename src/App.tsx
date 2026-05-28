@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Employee, LeaveRecord, SecurityLog, GistConfig, Role, LeaveType } from './types';
+import { Employee, LeaveRecord, SecurityLog, Role, LeaveType } from './types';
 import {
   INITIAL_EMPLOYEES,
   INITIAL_LEAVE_RECORDS,
@@ -11,7 +11,6 @@ import {
 } from './data';
 
 // Import our modular sub-components
-import GistSyncModal from './components/GistSyncModal';
 import SecurityLogsModal from './components/SecurityLogsModal';
 import EmployeeManager from './components/EmployeeManager';
 
@@ -53,12 +52,10 @@ import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 
 // ============================================================================
-// 【雲端 Gist 自動雙向同步金鑰配置區】
-// 您可以直接在此處填入您的金鑰預設值，或是透過環境變數 (.env) VITE_GIST_ID / VITE_GIST_PAT 帶入。
-// 系統將自動代管同步，無需員工手動輸入，且設定視窗已完全隱藏。
+// 【雲端 Google Sheets 自動雙向同步配置區】
+// 透過環境變數 (.env) VITE_API_URL 帶入 Google Apps Script 佈署網址。
 // ============================================================================
-const DEFAULT_GIST_ID = import.meta.env.VITE_GIST_ID || ''; 
-const DEFAULT_GIST_PAT = import.meta.env.VITE_GIST_PAT || '';
+const apiUrl = import.meta.env.VITE_API_URL || '';
 
 export default function App() {
   // -------------------------------------------------------------
@@ -79,29 +76,9 @@ export default function App() {
     return saved ? JSON.parse(saved) : INITIAL_SECURITY_LOGS;
   });
 
-  const [gistConfig, setGistConfig] = useState<GistConfig>(() => {
-    const defaultId = (DEFAULT_GIST_ID as string) !== 'your_default_gist_id_here' ? DEFAULT_GIST_ID : '';
-    const defaultPat = (DEFAULT_GIST_PAT as string) !== 'your_default_pat_here' ? DEFAULT_GIST_PAT : '';
-
-    const saved = localStorage.getItem('team_scheduling_gist');
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      // 優先使用專案變數 / 環境變數覆蓋
-      const finalId = defaultId || parsed.gistId || '';
-      const finalPat = defaultPat || parsed.githubToken || '';
-      return {
-        githubToken: finalPat,
-        gistId: finalId,
-        lastSynced: parsed.lastSynced || '',
-        status: finalPat && finalId ? 'CONNECTED' : 'UNCONFIGURED'
-      };
-    }
-    return {
-      githubToken: defaultPat,
-      gistId: defaultId,
-      lastSynced: '',
-      status: defaultPat && defaultId ? 'CONNECTED' : 'UNCONFIGURED'
-    };
+  const [status, setStatus] = useState<string>('試算表連線中...');
+  const [lastSynced, setLastSynced] = useState<string>(() => {
+    return localStorage.getItem('team_scheduling_last_synced') || '';
   });
 
   // Default logged in user: null, to enforce login view first upon visit (except when saved session exists)
@@ -112,6 +89,84 @@ export default function App() {
     }
     return null; // Require login initially
   });
+
+  const loadLocalBackup = () => {
+    const localEmp = localStorage.getItem('team_scheduling_employees');
+    const localLeave = localStorage.getItem('team_scheduling_leaves');
+    const localLogs = localStorage.getItem('team_scheduling_logs');
+    if (localEmp) setEmployees(JSON.parse(localEmp));
+    if (localLeave) setLeaveRecords(JSON.parse(localLeave));
+    if (localLogs) setSecurityLogs(JSON.parse(localLogs));
+  };
+
+  // 1. 初始化：從 Google Sheets 載入所有資料
+  useEffect(() => {
+    // 優先讀取登入狀態
+    const savedUser = localStorage.getItem('team_scheduling_login_user');
+    if (savedUser) setCurrentLoginUser(JSON.parse(savedUser));
+
+    if (!apiUrl) {
+      setStatus('錯誤：未設定 VITE_API_URL 環境變數');
+      loadLocalBackup();
+      return;
+    }
+
+    const loadDataFromSheets = async () => {
+      try {
+        setStatus('雲端資料同步中...');
+        const response = await fetch(apiUrl);
+        const cloudData = await response.json();
+        
+        if (cloudData) {
+          // 解析 Google Sheets 的雙軌整合資料
+          if (cloudData.EMPLOYEES && Array.isArray(cloudData.EMPLOYEES)) {
+            setEmployees(cloudData.EMPLOYEES);
+          }
+          if (cloudData.LEAVE_RECORDS) {
+            if (Array.isArray(cloudData.LEAVE_RECORDS)) {
+              setLeaveRecords(cloudData.LEAVE_RECORDS);
+            } else if (typeof cloudData.LEAVE_RECORDS === 'object') {
+              const flatLeaves: LeaveRecord[] = [];
+              Object.entries(cloudData.LEAVE_RECORDS).forEach(([empName, records]) => {
+                const emp = employees.find(e => e.name === empName);
+                if (Array.isArray(records)) {
+                  records.forEach((rec: any, idx: number) => {
+                    flatLeaves.push({
+                      id: rec.id || `lr-${empName}-${rec.date}-${idx}`,
+                      employeeId: emp?.id || empName,
+                      employeeName: empName,
+                      role: emp?.role || 'CLEANER',
+                      date: rec.date,
+                      type: rec.type || '排休',
+                      note: rec.note || '',
+                    });
+                  });
+                }
+              });
+              setLeaveRecords(flatLeaves);
+            }
+          }
+          if (cloudData.SECURITY_LOGS && Array.isArray(cloudData.SECURITY_LOGS)) {
+            setSecurityLogs(cloudData.SECURITY_LOGS);
+          }
+          
+          setStatus('Google 試算表雙軌同步已連線 (CONNECTED)');
+          const syncTime = new Date().toLocaleString();
+          setLastSynced(syncTime);
+          localStorage.setItem('team_scheduling_last_synced', syncTime);
+        } else {
+          loadLocalBackup();
+          setStatus('試算表無資料，已載入本地暫存');
+        }
+      } catch (error) {
+        console.error("讀取 Google Sheets 失敗:", error);
+        loadLocalBackup();
+        setStatus('連線失敗，已切換至離線暫存模式');
+      }
+    };
+
+    loadDataFromSheets();
+  }, [apiUrl]);
 
   // Sync state to localstorage when changes occur
   useEffect(() => {
@@ -209,28 +264,6 @@ export default function App() {
   const [isBackupOpen, setIsBackupOpen] = useState(false);
   const [isLogsOpen, setIsLogsOpen] = useState(false);
   const [isEmpManagerOpen, setIsEmpManagerOpen] = useState(false);
-  const [isAdminEditingGist, setIsAdminEditingGist] = useState(false);
-  const [adminGistIdInput, setAdminGistIdInput] = useState(() => gistConfig.gistId);
-  const [adminPatInput, setAdminPatInput] = useState(() => gistConfig.githubToken);
-
-  // 在 App.tsx 的 useEffect 中，確保加上這一小段來讀取 Vercel 與環境變數：
-  useEffect(() => {
-    const gistId = import.meta.env.VITE_GIST_ID;
-    const gistPat = import.meta.env.VITE_GIST_PAT;
-
-    // 強制檢查環境變數並啟動同步
-    if (gistId && gistPat) {
-      console.log("偵測到環境變數，準備連線...");
-      setGistConfig((prev) => ({
-        ...prev,
-        gistId,
-        githubToken: gistPat,
-        status: 'CONNECTED'
-      }));
-      setAdminGistIdInput(gistId);
-      setAdminPatInput(gistPat);
-    }
-  }, []);
 
   // Leave Editor Dialog States
   const [editingDate, setEditingDate] = useState<string | null>(null);
@@ -276,58 +309,67 @@ export default function App() {
   const [isDownloading, setIsDownloading] = useState(false);
   const [isRestoreConfirmOpen, setIsRestoreConfirmOpen] = useState(false);
 
+  // 2. 獨立單點上傳：當員工點選假單時，立刻同步該變更
+  const syncChangeToGoogleSheets = async (updatedLeaves: LeaveRecord[], targetEmployeeName: string) => {
+    if (!apiUrl) return;
+    try {
+      localStorage.setItem('team_scheduling_leaves', JSON.stringify(updatedLeaves));
+      
+      await fetch(apiUrl, {
+        method: 'POST',
+        mode: 'no-cors', // 確保跨網域不會被攔截
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: targetEmployeeName,
+          // 把整包最新的 LEAVE_RECORDS 與名單打包傳送，由 GAS 進行行級鎖定更新
+          all_data: {
+            EMPLOYEES: employees,
+            LEAVE_RECORDS: updatedLeaves,
+            SECURITY_LOGS: securityLogs
+          }
+        })
+      });
+      console.log(`${targetEmployeeName} 的排班已即時獨立同步至 Google Sheets`);
+      const syncTime = new Date().toLocaleString();
+      setLastSynced(syncTime);
+      localStorage.setItem('team_scheduling_last_synced', syncTime);
+    } catch (error) {
+      console.error("即時同步至 Google Sheets 失敗:", error);
+    }
+  };
+
   const handleCloudUpload = async () => {
-    if (gistConfig.status !== 'CONNECTED' || !gistConfig.githubToken || !gistConfig.gistId) {
-      showToast('尚未設定或啟用 GitHub Gist 雲端連線，請聯絡系統管理員設定！', true);
+    if (!apiUrl) {
+      showToast('未設定 VITE_API_URL 雲端同步連結，請聯絡系統管理員設定！', true);
       return;
     }
 
     setIsUploading(true);
-    showToast('正在將本地資料備份並上傳至雲端中...');
-    handleAddLog('雲端備份上傳', '將本地端同仁與排休排班資料備份上傳至 GitHub Gist。');
+    showToast('正在將本地資料備份並上傳至 Google Sheets 中...');
+    handleAddLog('雲端備份上傳', '將本地端同仁與排休排班資料備份上傳至 Google Sheets。');
 
     try {
-      const stateToBackup = {
-        version: '1.0',
-        lastUpdated: new Date().toISOString(),
-        employees: employees,
-        leaveRecords: leaveRecords,
-        securityLogs: securityLogs,
-      };
-
-      const payload = {
-        description: '團隊排休系統雲端自動備份資料',
-        files: {
-          'schedule.json': {
-            content: JSON.stringify(stateToBackup, null, 2),
-          },
-        },
-      };
-
-      const pushRes = await fetch(`https://api.github.com/gists/${gistConfig.gistId}`, {
-        method: 'PATCH',
-        headers: {
-          'Authorization': `Bearer ${gistConfig.githubToken}`,
-          'Accept': 'application/vnd.github+json',
-          'X-GitHub-Api-Version': '2022-11-28',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
+      await fetch(apiUrl, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'ALL_DATA_BACKUP',
+          all_data: {
+            EMPLOYEES: employees,
+            LEAVE_RECORDS: leaveRecords,
+            SECURITY_LOGS: securityLogs,
+          }
+        })
       });
 
-      if (!pushRes.ok) {
-        throw new Error(`雲端寫入失敗 (狀態碼: ${pushRes.status})`);
-      }
-
       const syncTime = new Date().toLocaleString();
-      setGistConfig(prev => ({
-        ...prev,
-        lastSynced: syncTime,
-        status: 'CONNECTED',
-      }));
+      setLastSynced(syncTime);
+      localStorage.setItem('team_scheduling_last_synced', syncTime);
+      setStatus('Google 試算表雙軌同步已連線 (CONNECTED)');
 
-      handleAddLog('雲端備份成功', '成功將本地最新同仁及排休資料覆蓋備份至雲端。');
-      showToast('資料已成功備份上傳至雲端！');
+      handleAddLog('雲端備份成功', '成功將本地最新同仁及排休資料覆蓋備份至試算表。');
+      showToast('資料已成功備份上傳至 Google Sheets 試算表！');
     } catch (err: any) {
       handleAddLog('雲端備份上傳失敗', `備份上傳錯誤：${err.message || err}`);
       showToast(`備份上傳失敗：${err.message || '連線中斷'}`, true);
@@ -337,52 +379,63 @@ export default function App() {
   };
 
   const handleCloudDownload = async () => {
-    if (gistConfig.status !== 'CONNECTED' || !gistConfig.githubToken || !gistConfig.gistId) {
-      showToast('尚未設定或啟用 GitHub Gist 雲端連線，請聯絡系統管理員設定！', true);
+    if (!apiUrl) {
+      showToast('未設定 VITE_API_URL 雲端同步連結，請聯絡系統管理員設定！', true);
       return;
     }
 
     setIsDownloading(true);
-    showToast('正在自雲端下載最新備份資料...');
-    handleAddLog('雲端下載資料', '啟動從 GitHub Gist 下載雲端備份回復程序。');
+    showToast('正在自 Google Sheets 下載最新備份資料...');
+    handleAddLog('雲端下載資料', '啟動從 Google Sheets 下載雲端備份回復程序。');
 
     try {
-      const pullRes = await fetch(`https://api.github.com/gists/${gistConfig.gistId}`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${gistConfig.githubToken}`,
-          'Accept': 'application/vnd.github+json',
-          'X-GitHub-Api-Version': '2022-11-28',
-        },
-      });
-
+      const pullRes = await fetch(apiUrl);
       if (!pullRes.ok) {
         throw new Error(`雲端讀取失敗 (狀態碼: ${pullRes.status})`);
       }
 
-      const gistData = await pullRes.json();
-      const backupFile = gistData.files?.['schedule.json'];
-      if (!backupFile || !backupFile.content) {
-        throw new Error('雲端找不到備份檔案 schedule.json！');
+      const cloudData = await pullRes.json();
+      if (!cloudData) {
+        throw new Error('雲端找不到備份資料！');
       }
 
-      const parsed = JSON.parse(backupFile.content);
-      if (!parsed.employees || !parsed.leaveRecords) {
-        throw new Error('雲端備份檔案格式不正確，缺少同仁或排休資料！');
+      if (cloudData.EMPLOYEES && Array.isArray(cloudData.EMPLOYEES)) {
+        setEmployees(cloudData.EMPLOYEES);
+      }
+      
+      if (cloudData.LEAVE_RECORDS) {
+        if (Array.isArray(cloudData.LEAVE_RECORDS)) {
+          setLeaveRecords(cloudData.LEAVE_RECORDS);
+        } else if (typeof cloudData.LEAVE_RECORDS === 'object') {
+          const flatLeaves: LeaveRecord[] = [];
+          Object.entries(cloudData.LEAVE_RECORDS).forEach(([empName, records]) => {
+            const emp = employees.find(e => e.name === empName);
+            if (Array.isArray(records)) {
+              records.forEach((rec: any, idx: number) => {
+                flatLeaves.push({
+                   id: rec.id || `lr-${empName}-${rec.date}-${idx}`,
+                   employeeId: emp?.id || empName,
+                   employeeName: empName,
+                   role: emp?.role || 'CLEANER',
+                   date: rec.date,
+                   type: rec.type || '排休',
+                   note: rec.note || '',
+                });
+              });
+            }
+          });
+          setLeaveRecords(flatLeaves);
+        }
       }
 
-      setEmployees(parsed.employees);
-      setLeaveRecords(parsed.leaveRecords);
-      if (parsed.securityLogs) {
-        setSecurityLogs(parsed.securityLogs);
+      if (cloudData.SECURITY_LOGS && Array.isArray(cloudData.SECURITY_LOGS)) {
+        setSecurityLogs(cloudData.SECURITY_LOGS);
       }
 
       const syncTime = new Date().toLocaleString();
-      setGistConfig(prev => ({
-        ...prev,
-        lastSynced: syncTime,
-        status: 'CONNECTED',
-      }));
+      setLastSynced(syncTime);
+      localStorage.setItem('team_scheduling_last_synced', syncTime);
+      setStatus('Google 試算表雙軌同步已連線 (CONNECTED)');
 
       handleAddLog('雲端還原成功', '成功從雲端回復資料至本地端，完全覆蓋舊資料。');
       showToast('雲端備份資料已成功下載並還原至本地端！');
@@ -579,6 +632,7 @@ export default function App() {
           `移除「${targetEmp.name}」於 ${dateStr} 的排休。`
         );
         showToast(`已為 ${targetEmp.name} 取消 ${dateStr} 的休假`);
+        syncChangeToGoogleSheets(remaining, targetEmp.name);
       } else {
         // Add leave -> Validation limit!
         const check = checkCleanerLimit(dateStr, targetEmpId);
@@ -600,12 +654,14 @@ export default function App() {
           note: '快捷鍵建立',
         };
 
-        setLeaveRecords((prev) => [...prev, newRecord]);
+        const updated = [...leaveRecords, newRecord];
+        setLeaveRecords(updated);
         handleAddLog(
           '設定休假(快捷)',
           `為「${targetEmp.name}」排定 ${dateStr} 為【${quickLeaveType}】。`
         );
         showToast(`已為 ${targetEmp.name} 登記 ${dateStr}【${quickLeaveType}】`);
+        syncChangeToGoogleSheets(updated, targetEmp.name);
       }
       return;
     }
@@ -700,6 +756,7 @@ export default function App() {
     }
 
     setLeaveRecords(updatedLeavesList);
+    syncChangeToGoogleSheets(updatedLeavesList, currentLoginUser?.name || '管理員設定');
 
     // Build operational audit log description
     let logsText = '';
@@ -723,6 +780,7 @@ export default function App() {
     if (!window.confirm(`確定要清除 ${dateStr} 所有登記的團隊假單嗎？`)) return;
     const remaining = leaveRecords.filter((lr) => lr.date !== dateStr);
     setLeaveRecords(remaining);
+    syncChangeToGoogleSheets(remaining, '全體清除-' + dateStr);
     handleAddLog('清空單日排休', `已完整清除 ${dateStr} 上登錄的所有假單紀錄。`);
     showToast(`已清空 ${dateStr} 的排班`);
     setEditingDate(null);
@@ -973,57 +1031,44 @@ export default function App() {
                 
                 {/* Cloud Connection Badge */}
                 {currentLoginUser?.role === 'ADMIN' ? (
-                  <button
-                    onClick={() => setIsBackupOpen(true)}
-                    className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold cursor-pointer border transition-colors ${
-                      gistConfig.status === 'CONNECTED'
-                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
-                        : gistConfig.status === 'ERROR'
-                        ? 'bg-rose-50 text-rose-600 border-rose-200 hover:bg-rose-100'
-                        : 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200'
+                  <div
+                    className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold border transition-colors ${
+                      apiUrl
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                        : 'bg-rose-50 text-rose-600 border-rose-200'
                     }`}
-                    title="點擊設定雲端 API 同步資訊"
+                    title="Google Sheets 試算表連線設定狀態"
                   >
                     <span
                       className={`w-1.5 h-1.5 rounded-full ${
-                        gistConfig.status === 'CONNECTED'
+                        apiUrl
                           ? 'bg-emerald-500 animate-pulse'
-                          : gistConfig.status === 'ERROR'
-                          ? 'bg-rose-500 animate-ping'
-                          : 'bg-slate-400'
+                          : 'bg-rose-500 animate-ping'
                       }`}
                     />
-                    {gistConfig.status === 'CONNECTED' ? (
-                      <span>Gist 雲端同步模式</span>
-                    ) : gistConfig.status === 'ERROR' ? (
-                      <span>Gist 金鑰異常</span>
+                    {apiUrl ? (
+                      <span>Sheets 試算表雙軌連線</span>
                     ) : (
-                      <span>純本地暫存模式</span>
+                      <span>未設定 VITE_API_URL 變數</span>
                     )}
-                  </button>
+                  </div>
                 ) : (
                   <div
                     className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${
-                      gistConfig.status === 'CONNECTED'
+                      apiUrl
                         ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                        : gistConfig.status === 'ERROR'
-                        ? 'bg-rose-50 text-rose-600 border-rose-200'
                         : 'bg-slate-100 text-slate-600 border-slate-200'
                     }`}
                   >
                     <span
                       className={`w-1.5 h-1.5 rounded-full ${
-                        gistConfig.status === 'CONNECTED'
+                        apiUrl
                           ? 'bg-emerald-500'
-                          : gistConfig.status === 'ERROR'
-                          ? 'bg-rose-500'
                           : 'bg-slate-400'
                       }`}
                     />
-                    {gistConfig.status === 'CONNECTED' ? (
+                    {apiUrl ? (
                       <span>雲端同步模式</span>
-                    ) : gistConfig.status === 'ERROR' ? (
-                      <span>雲端連線異常</span>
                     ) : (
                       <span>離線暫存模式</span>
                     )}
@@ -1031,8 +1076,8 @@ export default function App() {
                 )}
               </div>
               <p className="text-[10px] text-slate-400 font-mono">
-                {gistConfig.status === 'CONNECTED' && gistConfig.lastSynced
-                  ? `GitHub 最後同步: ${gistConfig.lastSynced}`
+                {apiUrl && lastSynced
+                  ? `試算表自動備份: ${lastSynced}`
                   : '數據儲存於 LocalStorage 暫存器中'}
               </p>
             </div>
@@ -1061,42 +1106,42 @@ export default function App() {
             {/* 備份上傳按鈕 */}
             <button
               onClick={() => {
-                if (gistConfig.status !== 'CONNECTED') {
-                  showToast('請聯絡系統管理員設定 GitHub Gist 雲端同步金鑰以啟用此功能！', true);
+                if (!apiUrl) {
+                  showToast('請先設定系統 VITE_API_URL 試算表同步網址！', true);
                   return;
                 }
                 handleCloudUpload();
               }}
               disabled={isUploading || isDownloading}
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg shadow-xs transition-colors cursor-pointer ${
-                gistConfig.status === 'CONNECTED'
+                apiUrl
                   ? 'text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200'
                   : 'text-slate-400 bg-slate-100 hover:bg-slate-200 border border-slate-200'
               }`}
-              title={gistConfig.status === 'CONNECTED' ? '將本地最新資料備份並上傳至雲端（不會覆蓋本地）' : '未設定雲端同步，點按獲取詳情'}
+              title={apiUrl ? '將本地最新資料備份並上傳至 Google Sheets（不會覆蓋本地）' : '未設定試算表 API，點按獲取詳情'}
             >
-              <Upload className={`w-3.5 h-3.5 ${gistConfig.status === 'CONNECTED' ? 'text-emerald-600' : 'text-slate-400'} ${isUploading ? 'animate-bounce' : ''}`} />
+              <Upload className={`w-3.5 h-3.5 ${apiUrl ? 'text-emerald-600' : 'text-slate-400'} ${isUploading ? 'animate-bounce' : ''}`} />
               <span>{isUploading ? '正在上傳...' : '備份上傳'}</span>
             </button>
 
             {/* 下載還原按鈕 */}
             <button
               onClick={() => {
-                if (gistConfig.status !== 'CONNECTED') {
-                  showToast('請聯絡系統管理員設定 GitHub Gist 雲端同步金鑰以啟用此功能！', true);
+                if (!apiUrl) {
+                  showToast('請先設定系統 VITE_API_URL 試算表同步網址！', true);
                   return;
                 }
                 setIsRestoreConfirmOpen(true);
               }}
               disabled={isUploading || isDownloading}
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg shadow-xs transition-colors cursor-pointer ${
-                gistConfig.status === 'CONNECTED'
-                  ? 'text-indigo-700 bg-indigo-50 hover:bg-indigo-105 border border-indigo-200'
+                apiUrl
+                  ? 'text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200'
                   : 'text-slate-400 bg-slate-100 hover:bg-slate-200 border border-slate-200'
               }`}
-              title={gistConfig.status === 'CONNECTED' ? '從雲端下載最新備份回復至本地端（會完全覆蓋本地）' : '未設定雲端同步，點按獲取詳情'}
+              title={apiUrl ? '從 Google Sheets 下載最新備份回復至本地端（會完全覆蓋本地）' : '未設定試算表 API，點按獲取詳情'}
             >
-              <Download className={`w-3.5 h-3.5 ${gistConfig.status === 'CONNECTED' ? 'text-indigo-600' : 'text-slate-400'} ${isDownloading ? 'animate-pulse' : ''}`} />
+              <Download className={`w-3.5 h-3.5 ${apiUrl ? 'text-indigo-600' : 'text-slate-400'} ${isDownloading ? 'animate-pulse' : ''}`} />
               <span>{isDownloading ? '正在下載...' : '下載還原'}</span>
             </button>
 
@@ -1146,101 +1191,45 @@ export default function App() {
             <div className="w-full mt-2.5 p-3.5 bg-slate-50 border border-slate-200/80 rounded-xl text-xs text-slate-500 animate-fade-in shadow-xs space-y-2">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/50 pb-2">
                 <div className="flex items-center gap-1.5">
-                  <span className="font-semibold text-slate-700">🔍 雲端備份金鑰設定狀態</span>
+                  <span className="font-semibold text-slate-700">🔍 Google Sheets 試算表連線狀態</span>
                   <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                    gistConfig.status === 'CONNECTED' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'
+                    apiUrl ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'
                   }`}>
-                    {gistConfig.status === 'CONNECTED' ? '已連線 (CONNECTED)' : '未設定 (UNCONFIGURED)'}
+                    {apiUrl ? '已連線 (CONNECTED)' : '未設定 (UNCONFIGURED)'}
                   </span>
                 </div>
-                
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsAdminEditingGist(!isAdminEditingGist);
-                    setAdminGistIdInput(gistConfig.gistId);
-                    setAdminPatInput(gistConfig.githubToken);
-                  }}
-                  className="px-2.5 py-1 text-[10px] font-semibold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 border border-indigo-100 rounded-md transition-colors cursor-pointer"
-                >
-                  {isAdminEditingGist ? '✕ 取消修改' : '⚙ 修改 Gist 金鑰'}
-                </button>
               </div>
 
-              {!isAdminEditingGist ? (
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[10px] pt-0.5">
-                  <span>
-                    <strong className="text-slate-600">Gist ID:</strong>{' '}
-                    {gistConfig.gistId ? (
-                      <span className="text-emerald-600 font-bold font-mono">{gistConfig.gistId.substring(0, Math.min(gistConfig.gistId.length, 8))}...</span>
-                    ) : (
-                      <span className="text-rose-500 font-semibold">尚未設定</span>
-                    )}
-                  </span>
-                  <span className="text-slate-200">|</span>
-                  <span>
-                    <strong className="text-slate-600">GitHub PAT:</strong>{' '}
-                    {gistConfig.githubToken ? (
-                      <span className="text-emerald-600 font-bold font-mono">{gistConfig.githubToken.substring(0, Math.min(gistConfig.githubToken.length, 12))}...</span>
-                    ) : (
-                      <span className="text-rose-500 font-semibold">尚未設定</span>
-                    )}
-                  </span>
-                  {gistConfig.lastSynced && (
-                    <>
-                      <span className="text-slate-200">|</span>
-                      <span>
-                        <strong className="text-slate-600">上次同步時間:</strong>{' '}
-                        <span className="text-indigo-600 font-mono">{gistConfig.lastSynced}</span>
-                      </span>
-                    </>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[10px] pt-0.5">
+                <span>
+                  <strong className="text-slate-600">API 連結:</strong>{' '}
+                  {apiUrl ? (
+                    <span className="text-emerald-600 font-bold font-mono">
+                      {apiUrl.substring(0, Math.min(apiUrl.length, 30))}...
+                    </span>
+                  ) : (
+                    <span className="text-rose-500 font-semibold">尚未設定 VITE_API_URL 環境變數</span>
                   )}
-                </div>
-              ) : (
-                <div className="space-y-2 pt-1 animate-fade-in">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-slate-600 block">GitHub Gist ID</label>
-                      <input
-                        type="text"
-                        value={adminGistIdInput}
-                        onChange={(e) => setAdminGistIdInput(e.target.value.trim())}
-                        placeholder="填入您的 GitHub Gist ID"
-                        className="w-full px-2.5 py-1.5 text-[11px] bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-800 placeholder-slate-300 font-mono"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-bold text-slate-600 block">GitHub 存取金鑰 (PAT)</label>
-                      <input
-                        type="password"
-                        value={adminPatInput}
-                        onChange={(e) => setAdminPatInput(e.target.value.trim())}
-                        placeholder="填入您的 ghp_ 開頭個人存取密碼"
-                        className="w-full px-2.5 py-1.5 text-[11px] bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 text-slate-800 placeholder-slate-300 font-mono"
-                      />
-                    </div>
-                  </div>
-                  <div className="flex justify-end gap-1.5 pt-1">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const updated = {
-                          githubToken: adminPatInput,
-                          gistId: adminGistIdInput,
-                          lastSynced: gistConfig.lastSynced || '',
-                          status: (adminPatInput && adminGistIdInput) ? ('CONNECTED' as const) : ('UNCONFIGURED' as const)
-                        };
-                        setGistConfig(updated);
-                        setIsAdminEditingGist(false);
-                        showToast('金鑰更新成功！您可以立即點擊進行備份與載入。', false);
-                      }}
-                      className="px-3 py-1.5 text-[11px] font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors cursor-pointer"
-                    >
-                      儲存金鑰變更
-                    </button>
-                  </div>
-                </div>
-              )}
+                </span>
+                {apiUrl && (
+                  <>
+                    <span className="text-slate-200">|</span>
+                    <span>
+                      <strong className="text-slate-600">最新同步模式:</strong>{' '}
+                      <span className="text-indigo-600 font-bold">雙軌即時雙向備份</span>
+                    </span>
+                  </>
+                )}
+                {lastSynced && (
+                  <>
+                    <span className="text-slate-200">|</span>
+                    <span>
+                      <strong className="text-slate-600">上次連線同步時間:</strong>{' '}
+                      <span className="font-bold text-emerald-600 font-mono">{lastSynced}</span>
+                    </span>
+                  </>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -2309,25 +2298,6 @@ export default function App() {
       )}
 
       {/* -------------------------------------------------------------
-          12. BACKUP & GIST CLOUD SYNC MODAL INTEGRATION
-          ------------------------------------------------------------- */}
-      <GistSyncModal
-        isOpen={isBackupOpen}
-        onClose={() => setIsBackupOpen(false)}
-        employees={employees}
-        leaveRecords={leaveRecords}
-        securityLogs={securityLogs}
-        gistConfig={gistConfig}
-        onUpdateConfig={setGistConfig}
-        onRestoreState={({ employees, leaveRecords, securityLogs }) => {
-          setEmployees(employees);
-          setLeaveRecords(leaveRecords);
-          setSecurityLogs(securityLogs);
-        }}
-        onAddLog={handleAddLog}
-      />
-
-      {/* -------------------------------------------------------------
           13. GENERAL SECURITY OPERATIONAL LOGS MODAL
           ------------------------------------------------------------- */}
       <SecurityLogsModal
@@ -2374,7 +2344,7 @@ export default function App() {
               <div className="space-y-1.5">
                 <h3 className="text-base font-bold text-slate-900">載入雲端備份警告</h3>
                 <p className="text-xs text-slate-500 leading-relaxed">
-                  這將從雲端 GitHub Gist 下載最新的備份檔案（含所有同仁名單、排休紀錄與日誌），並<strong className="text-rose-600 font-bold">完全覆蓋</strong>您目前在本地端（LocalStorage）中編輯的資料。
+                  這將從雲端 Google Sheets 試算表下載最新的備份檔案（含所有同仁名單、排休紀錄與日誌），並<strong className="text-rose-600 font-bold">完全覆蓋</strong>您目前在本地端（LocalStorage）中編輯的資料。
                 </p>
                 <p className="text-xs font-semibold text-rose-500">
                   ※ 此操作不可逆，尚未備份之本地端變更將會遺失！
@@ -2385,13 +2355,13 @@ export default function App() {
             <div className="bg-slate-50 p-3 rounded-lg border border-slate-100 space-y-1">
               <div className="text-[10px] text-slate-400 font-bold block uppercase tracking-wide">目前雲端設定狀態</div>
               <div className="text-xs text-slate-600 font-mono flex justify-between">
-                <span>Gist ID:</span>
-                <span className="font-bold">{gistConfig.gistId ? `${gistConfig.gistId.slice(0, 10)}...` : '未設定'}</span>
+                <span>試算表狀態:</span>
+                <span className="font-bold">{apiUrl ? '已配置 (CONNECTED)' : '未設定'}</span>
               </div>
-              {gistConfig.lastSynced && (
+              {lastSynced && (
                 <div className="text-xs text-slate-600 font-mono flex justify-between">
-                  <span>上次備份時間:</span>
-                  <span className="font-bold text-indigo-600">{gistConfig.lastSynced}</span>
+                  <span>上次同步時間:</span>
+                  <span className="font-bold text-indigo-600">{lastSynced}</span>
                 </div>
               )}
             </div>

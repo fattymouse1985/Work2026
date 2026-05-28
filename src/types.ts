@@ -29,10 +29,3 @@ export interface SecurityLog {
   action: string;
   details: string;
 }
-
-export interface GistConfig {
-  githubToken: string;
-  gistId: string;
-  lastSynced: string;
-  status: 'UNCONFIGURED' | 'CONNECTED' | 'ERROR';
-}
